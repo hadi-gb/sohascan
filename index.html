@@ -1443,8 +1443,17 @@
   });
 
   // --- Camera scanning (ZXing: pure-JS decode, works on iPhone Safari too — no BarcodeDetector needed) ---
+  // We drive the capture loop ourselves (rather than ZXing's built-in decodeFromConstraints) so we can
+  // crop every frame down to just the guide box before decoding, then upscale that crop. Feeding the
+  // decoder a full, busy 720p+ frame makes it hunt for a tiny barcode pattern in a lot of irrelevant
+  // background; a tight, enlarged crop of just the boxed area is one of the most effective real-world
+  // fixes for ZXing-style JS decoders missing barcodes that are perfectly readable to the eye.
   var codeReader = null;
   var scanning = false;
+  var mediaStream = null;
+  var scanTimer = null;
+  var captureCanvas = null;
+  var captureCtx = null;
 
   function getCodeReader() {
     if (codeReader) return codeReader;
@@ -1454,7 +1463,10 @@
       window.ZXing.BarcodeFormat.EAN_8,
       window.ZXing.BarcodeFormat.UPC_A,
       window.ZXing.BarcodeFormat.UPC_E,
-      window.ZXing.BarcodeFormat.CODE_128
+      window.ZXing.BarcodeFormat.CODE_128,
+      window.ZXing.BarcodeFormat.CODE_39,
+      window.ZXing.BarcodeFormat.ITF,
+      window.ZXing.BarcodeFormat.CODABAR
     ]);
     hints.set(window.ZXing.DecodeHintType.TRY_HARDER, true);
     codeReader = new window.ZXing.BrowserMultiFormatReader(hints, 250);
@@ -1471,7 +1483,17 @@
 
   function stopScan() {
     scanning = false;
-    if (codeReader) { try { codeReader.reset(); } catch (e) { /* already stopped */ } }
+    if (scanTimer) { clearInterval(scanTimer); scanTimer = null; }
+    if (mediaStream) { mediaStream.getTracks().forEach(function (t) { t.stop(); }); mediaStream = null; }
+    els.video.srcObject = null;
+    els.viewfinder.classList.remove("live");
+    els.scanBtn.style.display = "";
+    els.stopBtn.style.display = "none";
+  }
+
+  function scanFailed() {
+    scanning = false;
+    els.camNote.textContent = "Camera access was denied or unavailable. Check your browser's site settings and try again, or use manual entry below.";
     els.viewfinder.classList.remove("live");
     els.scanBtn.style.display = "";
     els.stopBtn.style.display = "none";
@@ -1485,32 +1507,44 @@
     scanning = true;
     els.vfStatus.textContent = "Starting camera…";
     var reader = getCodeReader();
-    var scanAttempts = 0;
-    reader.decodeFromConstraints({
-      video: {
-        facingMode: { ideal: "environment" },
-        width: { ideal: 1920 },
-        height: { ideal: 1080 },
-        advanced: [{ focusMode: "continuous" }]
-      }
-    }, els.video, function (result, err) {
+    navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }
+    }).then(function (stream) {
+      if (!scanning) { stream.getTracks().forEach(function (t) { t.stop(); }); return; }
+      mediaStream = stream;
+      els.video.srcObject = stream;
+      return els.video.play();
+    }).then(function () {
       if (!scanning) return;
-      if (result) {
-        handleCode(result.getText());
-        stopScan();
-        return;
+      if (!captureCanvas) {
+        captureCanvas = document.createElement("canvas");
+        captureCtx = captureCanvas.getContext("2d", { willReadFrequently: true });
       }
-      // err fires continuously while no barcode is in frame yet — expected, ignore it.
-      // Attempt counter is just a live signal that the decode loop is actually running.
-      scanAttempts++;
-      els.vfStatus.textContent = "Point camera at a barcode… (scanning #" + scanAttempts + ")";
-    }).catch(function () {
-      scanning = false;
-      els.camNote.textContent = "Camera access was denied or unavailable. Check your browser's site settings and try again, or use manual entry below.";
-      els.viewfinder.classList.remove("live");
-      els.scanBtn.style.display = "";
-      els.stopBtn.style.display = "none";
-    });
+      var scanAttempts = 0;
+      scanTimer = setInterval(function () {
+        if (!scanning) return;
+        var vw = els.video.videoWidth, vh = els.video.videoHeight;
+        if (!vw || !vh) return; // stream metadata not ready yet
+        // Crop to the same region the on-screen corner brackets highlight (14% inset, matching the CSS),
+        // then upscale ~1.6x — enlarging narrow bars measurably helps the decoder read them correctly.
+        var sw = vw * 0.72, sh = vh * 0.72;
+        var sx = (vw - sw) / 2, sy = (vh - sh) / 2;
+        var dw = Math.round(sw * 1.6), dh = Math.round(sh * 1.6);
+        captureCanvas.width = dw;
+        captureCanvas.height = dh;
+        captureCtx.drawImage(els.video, sx, sy, sw, sh, 0, 0, dw, dh);
+        try {
+          var result = reader.decodeBitmap(captureCanvas);
+          handleCode(result.getText());
+          stopScan();
+          return;
+        } catch (e) {
+          // no barcode recognized in this frame — expected on most attempts, just keep trying.
+        }
+        scanAttempts++;
+        els.vfStatus.textContent = "Point camera at a barcode… (scanning #" + scanAttempts + ")";
+      }, 250);
+    }).catch(scanFailed);
   }
 
   els.scanBtn.addEventListener("click", startScan);
