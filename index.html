@@ -1070,9 +1070,9 @@
 
     var html2 = '<div class="add-card">';
     if (isNewProduct) {
-      html2 += '<h4>New barcode</h4><p class="add-sub">This barcode isn\'t in the inventory yet. Fill in the details to create it.</p>';
-      html2 += '<div class="field"><label for="addBrand">Brand</label><input id="addBrand" type="text" placeholder="e.g. SESDERMA"></div>';
-      html2 += '<div class="field"><label for="addName">Product name</label><input id="addName" type="text" placeholder="e.g. radiance lift cream"></div>';
+      html2 += '<h4>New barcode - ' + escapeHtml(s.barcode) + '</h4><p class="add-sub">This barcode isn\'t in the inventory yet. Fill in the details to create it.</p>';
+      html2 += '<div class="field"><label for="addBrand">Brand</label><input id="addBrand" type="text" placeholder="e.g. EUCERIN"></div>';
+      html2 += '<div class="field"><label for="addName">Product name</label><input id="addName" type="text" placeholder="e.g. eye contour serum 15ML"></div>';
     } else {
       html2 += '<h4>' + escapeHtml(s.existing[0].name) + '</h4><p class="add-sub">' + escapeHtml(s.barcode) + '</p>';
       html2 += existingSummaryHtml(s.existing);
@@ -1083,7 +1083,7 @@
         '<span class="expiry-sep">/</span>' +
         '<input id="addExpiryYear" type="text" inputmode="numeric" placeholder="YYYY" maxlength="4" class="mono-input expiry-yyyy">' +
       '</div></div>';
-    html2 += '<div class="field"><label for="addQty">Quantity counted</label><input id="addQty" type="number" inputmode="numeric" min="0" value="1" class="mono-input"></div>';
+    html2 += '<div class="field"><label for="addQty">Quantity counted</label><input id="addQty" type="number" inputmode="numeric" min="0" value="0" class="mono-input"></div>';
     html2 += '<div class="field"><label for="addNotes">Notes (optional)</label><textarea id="addNotes" placeholder="e.g. near-expiry shelf, back stock&hellip;"></textarea></div>';
     html2 += '<div class="form-actions"><button class="btn-primary" id="submitAddBtn" type="button">Save to inventory</button></div>';
     html2 += '</div>';
