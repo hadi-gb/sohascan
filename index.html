@@ -1534,12 +1534,20 @@
         captureCanvas.height = dh;
         captureCtx.drawImage(els.video, sx, sy, sw, sh, 0, 0, dw, dh);
         try {
-          var result = reader.decodeBitmap(captureCanvas);
+          // decodeBitmap() requires an actual ZXing BinaryBitmap, not a raw <canvas> —
+          // build one from the capture canvas before handing it to the reader.
+          var luminanceSource = new window.ZXing.HTMLCanvasElementLuminanceSource(captureCanvas);
+          var binarizer = new window.ZXing.HybridBinarizer(luminanceSource);
+          var binaryBitmap = new window.ZXing.BinaryBitmap(binarizer);
+          var result = reader.decodeBitmap(binaryBitmap);
           handleCode(result.getText());
           stopScan();
           return;
         } catch (e) {
           // no barcode recognized in this frame — expected on most attempts, just keep trying.
+          // Temporary diagnostic logging (safe to remove later): surfaces the real ZXing error
+          // instead of silently swallowing it, in case something other than "not found" occurs.
+          if (window.console && console.debug) console.debug("[scan] decode attempt failed:", e && e.message ? e.message : e);
         }
         scanAttempts++;
         els.vfStatus.textContent = "Point camera at a barcode… (scanning #" + scanAttempts + ")";
