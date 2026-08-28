@@ -384,7 +384,27 @@
   .import-status.ok { color: var(--ok); }
   .import-status.error { color: var(--critical); }
 
-  /* Catalog */
+  /* Tabs */
+  .tabbar {
+    display: flex;
+    gap: 6px;
+    padding: 0 16px 12px;
+  }
+  .tab-btn {
+    flex: 1;
+    padding: 10px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-muted);
+    font-family: "Manrope", sans-serif;
+    font-weight: 700;
+    font-size: 0.82rem;
+    cursor: pointer;
+  }
+  .tab-btn.active { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }
+
+  /* Catalog / Inventory */
   .catalog-search {
     width: 100%;
     font-family: "Work Sans", sans-serif;
@@ -401,40 +421,80 @@
     color: var(--text-muted);
     margin: 8px 0 0;
   }
-  .catalog {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 9px;
+  .inv-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
   }
-  .demo-card {
+  .inv-card {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 12px;
     padding: 10px 11px;
-    text-align: left;
-    cursor: pointer;
     display: flex;
-    flex-direction: column;
-    gap: 6px;
+    align-items: center;
+    gap: 10px;
   }
-  .demo-card:hover { border-color: var(--accent); }
-  .demo-card .name {
+  .inv-card.clickable { cursor: pointer; }
+  .inv-card.clickable:hover { border-color: var(--accent); }
+  .inv-main { flex: 1; min-width: 0; }
+  .inv-name {
     font-family: "Manrope", sans-serif;
     font-weight: 700;
     font-size: 0.82rem;
-    line-height: 1.25;
+    line-height: 1.3;
   }
-  .demo-card .code {
+  .inv-code {
     font-family: "IBM Plex Mono", monospace;
-    font-size: 0.68rem;
+    font-size: 0.66rem;
     color: var(--text-muted);
     letter-spacing: 0.02em;
+    margin-top: 2px;
   }
-  .demo-card .batches {
-    font-size: 0.66rem;
-    color: var(--accent-strong);
+  .inv-badges {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
+    flex-wrap: wrap;
+  }
+  .inv-badge {
+    font-size: 0.64rem;
     font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 999px;
+    white-space: nowrap;
   }
+  .inv-badge.critical { background: var(--critical-soft); color: var(--critical); }
+  .inv-badge.warn { background: var(--warn-soft); color: var(--warn); }
+  .inv-badge.ok { background: var(--ok-soft); color: var(--ok); }
+  .inv-badge.info { background: var(--info-soft); color: var(--info); }
+  .inv-stepper {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .inv-stepper button {
+    width: 26px;
+    height: 26px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text);
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    line-height: 1;
+  }
+  .inv-stepper button:disabled { opacity: 0.5; cursor: default; }
+  .inv-stepper .inv-qty-num {
+    min-width: 20px;
+    text-align: center;
+    font-family: "IBM Plex Mono", monospace;
+    font-weight: 600;
+    font-size: 0.78rem;
+  }
+  .inv-chev { flex-shrink: 0; color: var(--text-muted); font-size: 18px; }
 
   /* Result */
   .result-head {
@@ -762,7 +822,13 @@
     <span class="demo-badge">Prototype</span>
   </header>
 
+  <div class="tabbar" role="tablist" aria-label="Sections">
+    <button class="tab-btn active" id="tabScanBtn" type="button" data-tab="scan">Scan</button>
+    <button class="tab-btn" id="tabInventoryBtn" type="button" data-tab="inventory">Inventory</button>
+  </div>
+
   <main>
+   <div id="scanView">
     <section aria-labelledby="mode-h">
       <h2 id="mode-h">Mode</h2>
       <div class="mode-toggle" role="group" aria-labelledby="mode-h">
@@ -803,14 +869,6 @@
       <div id="resultBody"></div>
     </section>
 
-    <section aria-labelledby="catalog-h">
-      <h2 id="catalog-h">Master inventory &mdash; tap to preview</h2>
-      <label class="sr-only" for="catalogSearch">Search catalog</label>
-      <input class="catalog-search" id="catalogSearch" type="text" placeholder="Search by name, brand, or barcode&hellip;" autocomplete="off">
-      <div class="catalog" id="catalog"></div>
-      <p class="catalog-note" id="catalogNote"></p>
-    </section>
-
     <section aria-labelledby="recent-h">
       <h2 id="recent-h">Recent activity</h2>
       <div class="recent-list" id="recentList">
@@ -830,6 +888,17 @@
         <p class="import-status" id="importStatus"></p>
       </div>
     </section>
+   </div>
+
+   <div id="inventoryView" hidden>
+    <section aria-labelledby="inventory-h">
+      <h2 id="inventory-h">Inventory &mdash; sorted by nearest expiry</h2>
+      <label class="sr-only" for="catalogSearch">Search inventory</label>
+      <input class="catalog-search" id="catalogSearch" type="text" placeholder="Search by name, brand, or barcode&hellip;" autocomplete="off">
+      <div class="inv-list" id="catalog"></div>
+      <p class="catalog-note" id="catalogNote"></p>
+    </section>
+   </div>
   </main>
 
   <footer>
@@ -953,8 +1022,21 @@
   ["video","viewfinder","vfStatus","scanBtn","stopBtn","camNote","manualForm","manualInput",
    "catalog","resultBody","recentList",
    "csvInput","resetBtn","importStatus","catalogSearch","catalogNote",
-   "modeCheckBtn","modeAddBtn","modeNote"
+   "modeCheckBtn","modeAddBtn","modeNote",
+   "tabScanBtn","tabInventoryBtn","scanView","inventoryView"
   ].forEach(function (id) { els[id] = document.getElementById(id); });
+
+  var activeTab = "scan"; // "scan" | "inventory"
+  function setTab(next) {
+    activeTab = next;
+    els.tabScanBtn.classList.toggle("active", activeTab === "scan");
+    els.tabInventoryBtn.classList.toggle("active", activeTab === "inventory");
+    els.scanView.hidden = activeTab !== "scan";
+    els.inventoryView.hidden = activeTab !== "inventory";
+    if (activeTab === "inventory") renderCatalog();
+  }
+  els.tabScanBtn.addEventListener("click", function () { setTab("scan"); });
+  els.tabInventoryBtn.addEventListener("click", function () { setTab("inventory"); });
 
   var recent = [];
   try {
@@ -1369,17 +1451,80 @@
     handleCode(els.manualInput.value);
   });
 
-  // --- Catalog ---
-  var CATALOG_LIMIT = 40;
+  // --- Catalog / Inventory tab: grouped by barcode, sorted by nearest expiry ---
+  var CATALOG_LIMIT = 60;
+  var inventoryBusyRow = null; // row number currently mid-adjust, to prevent double-clicks
 
   function groupedCatalog() {
     var byCode = {};
     var order = [];
     ACTIVE_BATCHES.forEach(function (b) {
-      if (!byCode[b.barcode]) { byCode[b.barcode] = { barcode: b.barcode, hasBarcode: b.hasBarcode, name: b.name, count: 0 }; order.push(b.barcode); }
-      byCode[b.barcode].count++;
+      if (!byCode[b.barcode]) { byCode[b.barcode] = { barcode: b.barcode, hasBarcode: b.hasBarcode, name: b.name, batches: [] }; order.push(b.barcode); }
+      byCode[b.barcode].batches.push(b);
     });
-    return order.map(function (code) { return byCode[code]; });
+    var rows = order.map(function (code) { return byCode[code]; });
+    rows.forEach(function (r) {
+      r.batches.sort(function (a, b) {
+        if (a.expiry && b.expiry) return a.expiry < b.expiry ? -1 : (a.expiry > b.expiry ? 1 : 0);
+        if (a.expiry) return -1;
+        if (b.expiry) return 1;
+        return 0;
+      });
+      r.nearest = r.batches[0];
+    });
+    rows.sort(function (a, b) {
+      var ae = a.nearest.expiry, be = b.nearest.expiry;
+      if (ae && be) return ae < be ? -1 : (ae > be ? 1 : 0);
+      if (ae) return -1;
+      if (be) return 1;
+      return a.name.localeCompare(b.name);
+    });
+    return rows;
+  }
+
+  function inventoryExpiryBadge(batch) {
+    var ex = expiryState(batch.expiry);
+    var label = batch.expiry ? (batch.expiryRaw + " · " + ex.sub) : ex.sub;
+    return '<span class="inv-badge ' + ex.tone + '">' + escapeHtml(label) + '</span>';
+  }
+
+  function inventoryQtyBadge(batch) {
+    var qs = qtyState(batch);
+    var label = qs.verified ? qs.value : "not tracked";
+    return '<span class="inv-badge ' + (qs.verified ? qs.tone : "info") + '">' + escapeHtml(label) + '</span>';
+  }
+
+  function inventoryStepperHtml(batch) {
+    var qs = qtyState(batch);
+    var qtyLabel = qs.verified ? qs.qty : "—";
+    var busy = inventoryBusyRow === batch.row;
+    return '<div class="inv-stepper">' +
+      '<button type="button" class="inv-dec" ' + (busy ? "disabled" : "") + '>−</button>' +
+      '<span class="inv-qty-num">' + escapeHtml(String(qtyLabel)) + '</span>' +
+      '<button type="button" class="inv-inc" ' + (busy ? "disabled" : "") + '>+</button>' +
+      '</div>';
+  }
+
+  function inventoryAdjust(batch, sign) {
+    if (inventoryBusyRow === batch.row) return;
+    if (usingImported) {
+      var current = (batch.qty === null || batch.qty === undefined) ? 0 : Number(batch.qty);
+      batch.qty = sign > 0 ? current + 1 : Math.max(0, current - 1);
+      renderCatalog();
+      return;
+    }
+    inventoryBusyRow = batch.row;
+    renderCatalog();
+    apiPost({ op: "adjust", row: batch.row, barcode: batch.barcode, delta: 1, sign: sign }).then(function (res) {
+      if (!res.ok) throw new Error(res.error || "Could not update.");
+      batch.qty = res.newQty;
+      inventoryBusyRow = null;
+      renderCatalog();
+    }).catch(function (err) {
+      inventoryBusyRow = null;
+      renderCatalog();
+      alert("Couldn’t update the sheet: " + err.message);
+    });
   }
 
   function renderCatalog() {
@@ -1393,23 +1538,38 @@
     var shown = list.slice(0, CATALOG_LIMIT);
     els.catalog.innerHTML = "";
     shown.forEach(function (p) {
-      var btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "demo-card";
-      btn.innerHTML = '<span class="name">' + escapeHtml(p.name) + '</span>' +
-        '<span class="code">' + escapeHtml(p.hasBarcode ? p.barcode : "no barcode") + '</span>' +
-        (p.count > 1 ? '<span class="batches">' + p.count + ' batches</span>' : "");
-      btn.addEventListener("click", function () { handleCode(p.barcode); });
-      els.catalog.appendChild(btn);
+      var card = document.createElement("div");
+      var single = p.batches.length === 1 ? p.batches[0] : null;
+      card.className = "inv-card" + (single ? "" : " clickable");
+      var badges = single
+        ? inventoryExpiryBadge(single) + inventoryQtyBadge(single)
+        : '<span class="inv-badge warn">' + p.batches.length + ' batches</span><span class="inv-badge info">nearest: ' + escapeHtml(p.nearest.expiry ? p.nearest.expiryRaw : "no expiry on file") + '</span>';
+      card.innerHTML = '<div class="inv-main">' +
+        '<div class="inv-name">' + escapeHtml(p.name) + '</div>' +
+        '<div class="inv-code">' + escapeHtml(p.hasBarcode ? p.barcode : "no barcode") + '</div>' +
+        '<div class="inv-badges">' + badges + '</div>' +
+        '</div>' +
+        (single ? inventoryStepperHtml(single) : '<span class="inv-chev">›</span>');
+      if (single) {
+        card.querySelector(".inv-dec").addEventListener("click", function () { inventoryAdjust(single, -1); });
+        card.querySelector(".inv-inc").addEventListener("click", function () { inventoryAdjust(single, 1); });
+      } else {
+        card.addEventListener("click", function () {
+          setMode("check");
+          setTab("scan");
+          handleCode(p.barcode);
+        });
+      }
+      els.catalog.appendChild(card);
     });
     if (catalogLoading && !ACTIVE_BATCHES.length) {
       els.catalogNote.textContent = "Loading your MASTER INVENTORY sheet…";
     } else if (!shown.length) {
       els.catalogNote.textContent = filterText ? "No products match “" + filterText + "”." : "No products loaded.";
     } else if (list.length > CATALOG_LIMIT) {
-      els.catalogNote.textContent = "Showing " + CATALOG_LIMIT + " of " + list.length + " distinct barcodes — search to narrow.";
+      els.catalogNote.textContent = "Showing " + CATALOG_LIMIT + " of " + list.length + " distinct barcodes, sorted by nearest expiry — search to narrow.";
     } else {
-      els.catalogNote.textContent = list.length + " distinct product" + (list.length === 1 ? "" : "s") + " (" + ACTIVE_BATCHES.length + " batch rows)" + (usingImported ? " — from " + importedFilename : " — from your MASTER INVENTORY sheet, live");
+      els.catalogNote.textContent = list.length + " distinct product" + (list.length === 1 ? "" : "s") + " (" + ACTIVE_BATCHES.length + " batch rows), sorted by nearest expiry" + (usingImported ? " — from " + importedFilename : " — from your MASTER INVENTORY sheet, live");
     }
   }
 
