@@ -421,6 +421,29 @@
     color: var(--text-muted);
     margin: 8px 0 0;
   }
+  .catalog-filters {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 9px;
+  }
+  .catalog-select {
+    flex: 1;
+    font-family: "Work Sans", sans-serif;
+    font-size: 0.82rem;
+    padding: 9px 8px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+  }
+  .catalog-showmore {
+    width: 100%;
+    margin-top: 4px;
+    background: var(--surface-2);
+    color: var(--accent-strong);
+    border-color: var(--border);
+  }
+  .catalog-showmore:hover { border-color: var(--accent); }
   .inv-list {
     display: flex;
     flex-direction: column;
@@ -914,7 +937,20 @@
       <h2 id="inventory-h">Inventory &mdash; sorted by nearest expiry</h2>
       <label class="sr-only" for="catalogSearch">Search inventory</label>
       <input class="catalog-search" id="catalogSearch" type="text" placeholder="Search by name, brand, or barcode&hellip;" autocomplete="off">
+      <div class="catalog-filters">
+        <label class="sr-only" for="catalogYear">Filter by year</label>
+        <select class="catalog-select" id="catalogYear"><option value="">All years</option></select>
+        <label class="sr-only" for="catalogMonth">Filter by month</label>
+        <select class="catalog-select" id="catalogMonth">
+          <option value="">All months</option>
+          <option value="1">Jan</option><option value="2">Feb</option><option value="3">Mar</option>
+          <option value="4">Apr</option><option value="5">May</option><option value="6">Jun</option>
+          <option value="7">Jul</option><option value="8">Aug</option><option value="9">Sep</option>
+          <option value="10">Oct</option><option value="11">Nov</option><option value="12">Dec</option>
+        </select>
+      </div>
       <div class="inv-list" id="catalog"></div>
+      <button type="button" class="btn-ghost btn-small catalog-showmore" id="catalogShowMore" hidden>Show more</button>
       <p class="catalog-note" id="catalogNote"></p>
     </section>
    </div>
@@ -1054,6 +1090,7 @@
   ["video","viewfinder","vfStatus","scanBtn","stopBtn","camNote","manualForm","manualInput",
    "catalog","resultBody","recentList",
    "csvInput","resetBtn","importStatus","catalogSearch","catalogNote",
+   "catalogYear","catalogMonth","catalogShowMore",
    "modeCheckBtn","modeAddBtn","modeNote",
    "tabScanBtn","tabInventoryBtn","scanView","inventoryView"
   ].forEach(function (id) { els[id] = document.getElementById(id); });
@@ -1183,8 +1220,6 @@
     }
     if (qs.verified && qs.qty <= 0) {
       banners += '<div class="banner critical">Out of stock for this batch.</div>';
-    } else if (qs.verified && qs.qty <= LOW_STOCK_THRESHOLD) {
-      banners += '<div class="banner warn">Low stock for this batch.</div>';
     }
     var qtyClass = qs.tone;
     var exClass = ex.tone;
@@ -1485,6 +1520,7 @@
 
   // --- Catalog / Inventory tab: grouped by barcode, sorted by nearest expiry ---
   var CATALOG_LIMIT = 60;
+  var catalogVisibleCount = CATALOG_LIMIT;
   var inventoryBusyRow = null; // row number currently mid-adjust, to prevent double-clicks
 
   function groupedCatalog() {
@@ -1561,15 +1597,57 @@
     });
   }
 
+  // A batch matches the year/month filters if its own expiry falls in the picked year
+  // and/or month. "" means "any" for that filter. yearFilter === "none" means "batches
+  // with no expiry on file at all" (month is meaningless there, so it's ignored).
+  function batchMatchesYearMonth(b, yearFilter, monthFilter) {
+    if (!yearFilter && !monthFilter) return true;
+    if (yearFilter === "none") return !b.expiry;
+    if (!b.expiry) return false;
+    var y = b.expiry.slice(0, 4);
+    var m = Number(b.expiry.slice(5, 7));
+    if (yearFilter && y !== yearFilter) return false;
+    if (monthFilter && m !== Number(monthFilter)) return false;
+    return true;
+  }
+
+  // Keeps the Year dropdown's options in sync with whatever years actually exist in the
+  // currently loaded data (live sheet or an imported test CSV), plus a "No expiry" bucket
+  // when at least one batch has none. Re-run whenever fresh data comes in.
+  function populateCatalogYearOptions() {
+    var years = {};
+    var hasNoExpiry = false;
+    ACTIVE_BATCHES.forEach(function (b) {
+      if (b.expiry) years[b.expiry.slice(0, 4)] = true; else hasNoExpiry = true;
+    });
+    var sortedYears = Object.keys(years).sort();
+    var current = els.catalogYear.value;
+    var html = '<option value="">All years</option>';
+    sortedYears.forEach(function (y) { html += '<option value="' + y + '">' + y + '</option>'; });
+    if (hasNoExpiry) html += '<option value="none">No expiry</option>';
+    els.catalogYear.innerHTML = html;
+    // Keep the user's current pick selected if it's still a valid option after reloading.
+    if (sortedYears.indexOf(current) !== -1 || (current === "none" && hasNoExpiry)) {
+      els.catalogYear.value = current;
+    }
+  }
+
   function renderCatalog() {
     var filterText = (els.catalogSearch.value || "").trim().toLowerCase();
+    var yearFilter = els.catalogYear.value;
+    var monthFilter = els.catalogMonth.value;
     var list = groupedCatalog();
     if (filterText) {
       list = list.filter(function (p) {
         return p.name.toLowerCase().indexOf(filterText) !== -1 || p.barcode.toLowerCase().indexOf(filterText) !== -1;
       });
     }
-    var shown = list.slice(0, CATALOG_LIMIT);
+    if (yearFilter || monthFilter) {
+      list = list.filter(function (p) {
+        return p.batches.some(function (b) { return batchMatchesYearMonth(b, yearFilter, monthFilter); });
+      });
+    }
+    var shown = list.slice(0, catalogVisibleCount);
     els.catalog.innerHTML = "";
     shown.forEach(function (p) {
       var card = document.createElement("div");
@@ -1597,14 +1675,16 @@
       }
       els.catalog.appendChild(card);
     });
+    var filtered = !!(filterText || yearFilter || monthFilter);
+    els.catalogShowMore.hidden = shown.length >= list.length;
     if (catalogLoading && !ACTIVE_BATCHES.length) {
       els.catalogNote.textContent = "Loading your MASTER INVENTORY sheet…";
     } else if (!shown.length) {
-      els.catalogNote.textContent = filterText ? "No products match “" + filterText + "”." : "No products loaded.";
-    } else if (list.length > CATALOG_LIMIT) {
-      els.catalogNote.textContent = "Showing " + CATALOG_LIMIT + " of " + list.length + " distinct barcodes, sorted by nearest expiry — search to narrow.";
+      els.catalogNote.textContent = filtered ? "No products match your search/filters." : "No products loaded.";
+    } else if (list.length > shown.length) {
+      els.catalogNote.textContent = "Showing " + shown.length + " of " + list.length + " matching product" + (list.length === 1 ? "" : "s") + ", sorted by nearest expiry — tap Show more to see more.";
     } else {
-      els.catalogNote.textContent = list.length + " distinct product" + (list.length === 1 ? "" : "s") + " (" + ACTIVE_BATCHES.length + " batch rows), sorted by nearest expiry" + (usingImported ? " — from " + importedFilename : " — from your MASTER INVENTORY sheet, live");
+      els.catalogNote.textContent = list.length + " distinct product" + (list.length === 1 ? "" : "s") + (filtered ? " matching your search/filters" : "") + ", sorted by nearest expiry" + (usingImported ? " — from " + importedFilename : " — from your MASTER INVENTORY sheet, live");
     }
   }
 
@@ -1615,6 +1695,7 @@
     apiAll().then(function (batches) {
       ACTIVE_BATCHES = batches;
       catalogLoading = false;
+      populateCatalogYearOptions();
       renderCatalog();
     }).catch(function (err) {
       catalogLoading = false;
@@ -1622,7 +1703,11 @@
     });
   }
 
-  els.catalogSearch.addEventListener("input", renderCatalog);
+  function resetCatalogPageAndRender() { catalogVisibleCount = CATALOG_LIMIT; renderCatalog(); }
+  els.catalogSearch.addEventListener("input", resetCatalogPageAndRender);
+  els.catalogYear.addEventListener("change", resetCatalogPageAndRender);
+  els.catalogMonth.addEventListener("change", resetCatalogPageAndRender);
+  els.catalogShowMore.addEventListener("click", function () { catalogVisibleCount += CATALOG_LIMIT; renderCatalog(); });
 
   // --- Spreadsheet import (re-test with a fresh export) ---
   var HEADER_ALIASES = {
@@ -1731,6 +1816,10 @@
     usingImported = true;
     importedFilename = filename;
     els.catalogSearch.value = "";
+    els.catalogYear.value = "";
+    els.catalogMonth.value = "";
+    catalogVisibleCount = CATALOG_LIMIT;
+    populateCatalogYearOptions();
     setImportStatus("Loaded " + batches.length + " row" + (batches.length === 1 ? "" : "s") + " from " + filename + "." + (skipped ? (" Skipped " + skipped + " row" + (skipped === 1 ? "" : "s") + ".") : ""), false);
     renderCatalog();
   }
@@ -1754,6 +1843,9 @@
       els.importStatus.textContent = "";
     }
     els.catalogSearch.value = "";
+    els.catalogYear.value = "";
+    els.catalogMonth.value = "";
+    catalogVisibleCount = CATALOG_LIMIT;
     refreshCatalog();
   });
 
