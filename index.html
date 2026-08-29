@@ -814,15 +814,14 @@
   .lock-card input {
     width: 100%;
     box-sizing: border-box;
-    text-align: center;
-    letter-spacing: 4px;
-    font-size: 20px;
+    text-align: left;
+    font-size: 16px;
     padding: 12px;
     border-radius: 10px;
     border: 1px solid var(--border);
     background: var(--surface-2);
     color: var(--text);
-    font-family: "IBM Plex Mono", monospace;
+    font-family: "Work Sans", sans-serif;
     margin-bottom: 12px;
   }
   .lock-card button {
@@ -842,15 +841,36 @@
     min-height: 18px;
     margin-top: 10px;
   }
+  .session-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 16px 10px;
+    font-size: 0.74rem;
+    color: var(--text-muted);
+  }
+  .session-bar button {
+    background: none;
+    border: none;
+    color: var(--accent-strong);
+    font-size: 0.74rem;
+    font-weight: 600;
+    padding: 4px 2px;
+    cursor: pointer;
+  }
+  .session-bar button:hover { text-decoration: underline; }
   [hidden] { display: none !important; }
 </style>
 
 <div class="lock-screen" id="lockScreen">
   <div class="lock-card">
     <h2>ScanCare</h2>
-    <p>Enter the access password to continue.</p>
-    <input id="lockInput" type="password" inputmode="numeric" placeholder="Password" autocomplete="off" maxlength="12">
-    <button id="lockSubmit" type="button">Unlock</button>
+    <p>Sign in with your ScanCare account to continue.</p>
+    <label class="sr-only" for="lockUsername">Username</label>
+    <input id="lockUsername" type="text" placeholder="Username" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <label class="sr-only" for="lockPassword">Password</label>
+    <input id="lockPassword" type="password" placeholder="Password" autocomplete="current-password">
+    <button id="lockSubmit" type="button">Log in</button>
     <div class="lock-error" id="lockError"></div>
   </div>
 </div>
@@ -863,6 +883,11 @@
     </div>
     <span class="demo-badge">Prototype</span>
   </header>
+
+  <div class="session-bar" id="sessionBar" hidden>
+    <span id="sessionUserLabel"></span>
+    <button type="button" id="logoutBtn">Log out</button>
+  </div>
 
   <div class="tabbar" role="tablist" aria-label="Sections">
     <button class="tab-btn active" id="tabScanBtn" type="button" data-tab="scan">Scan</button>
@@ -966,66 +991,147 @@
 (function () {
   "use strict";
 
-  // ---- Shared password lock (deters casual/opportunistic access; not a real secret — see project notes) ----
-  (function () {
-    var APP_PASSWORD = "6798";
-    var UNLOCK_KEY = "sohascan_unlocked";
-    var lockScreen = document.getElementById("lockScreen");
-    var lockInput = document.getElementById("lockInput");
-    var lockSubmit = document.getElementById("lockSubmit");
-    var lockError = document.getElementById("lockError");
+  // Declared up front (not down with the rest of the API helpers) because the session
+  // boot-check below needs it immediately, before the script has finished running top to
+  // bottom — var declarations without a value assigned yet would just be undefined there.
+  var API_URL = "https://script.google.com/macros/s/AKfycbwv7fLnDRlTQmEZDAXBNtG9JK9fHYsSqjlgQH7zFi9TP85beGW17FI9o3uVPpaa1xvw/exec";
 
-    function unlock() {
-      try { localStorage.setItem(UNLOCK_KEY, "1"); } catch (e) {}
-      lockScreen.hidden = true;
-    }
+  // ---- Real, backend-verified session (username + password login; see AppsScript.gs) ----
+  // localStorage here only holds an opaque token for convenience between page loads —
+  // it is never treated as proof of anything by itself. Every protected request re-sends
+  // the token, and the Apps Script backend is the only thing that decides whether it's
+  // still a real, unexpired session before doing anything with it.
+  var SESSION_KEY = "scancare_session_v1";
+  var lockScreen = document.getElementById("lockScreen");
+  var lockUsername = document.getElementById("lockUsername");
+  var lockPassword = document.getElementById("lockPassword");
+  var lockSubmit = document.getElementById("lockSubmit");
+  var lockError = document.getElementById("lockError");
+  var sessionBar = document.getElementById("sessionBar");
+  var sessionUserLabel = document.getElementById("sessionUserLabel");
+  var logoutBtn = document.getElementById("logoutBtn");
 
-    var alreadyUnlocked = false;
-    try { alreadyUnlocked = localStorage.getItem(UNLOCK_KEY) === "1"; } catch (e) {}
-    if (alreadyUnlocked) {
-      lockScreen.hidden = true;
+  function readSession() {
+    try {
+      var raw = localStorage.getItem(SESSION_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+  }
+  function getSessionToken() { var s = readSession(); return s ? s.token : ""; }
+  function setSession(token, username, role) {
+    try { localStorage.setItem(SESSION_KEY, JSON.stringify({ token: token, username: username, role: role })); } catch (e) {}
+  }
+  function clearSession() {
+    try { localStorage.removeItem(SESSION_KEY); } catch (e) {}
+  }
+
+  function showApp() {
+    var s = readSession();
+    lockScreen.hidden = true;
+    sessionBar.hidden = false;
+    sessionUserLabel.textContent = s ? (s.username + (s.role === "admin" ? " · admin" : "")) : "";
+  }
+
+  function showLoginScreen(message) {
+    sessionBar.hidden = true;
+    lockScreen.hidden = false;
+    lockError.textContent = message || "";
+    lockPassword.value = "";
+    setTimeout(function () { lockUsername.focus(); }, 50);
+  }
+
+  function attemptLogin() {
+    var username = lockUsername.value.trim();
+    var password = lockPassword.value;
+    if (!username || !password) {
+      lockError.textContent = "Enter your username and password.";
       return;
     }
+    lockSubmit.disabled = true;
+    lockError.textContent = "Signing in…";
+    fetch(API_URL, { method: "POST", body: JSON.stringify({ op: "login", username: username, password: password }) })
+      .then(function (res) { return res.json(); })
+      .then(function (res) {
+        lockSubmit.disabled = false;
+        if (!res.ok) {
+          lockError.textContent = res.error || "Invalid username or password.";
+          lockPassword.value = "";
+          lockPassword.focus();
+          return;
+        }
+        setSession(res.token, res.username, res.role);
+        showApp();
+        refreshCatalog(); // now that we're actually authenticated, pull live data
+      })
+      .catch(function (err) {
+        lockSubmit.disabled = false;
+        lockError.textContent = "Couldn’t reach the server: " + err.message;
+      });
+  }
 
-    function tryUnlock() {
-      if (lockInput.value === APP_PASSWORD) {
-        lockError.textContent = "";
-        unlock();
-      } else {
-        lockError.textContent = "Incorrect password.";
-        lockInput.value = "";
-        lockInput.focus();
-      }
+  lockSubmit.addEventListener("click", attemptLogin);
+  [lockUsername, lockPassword].forEach(function (el) {
+    el.addEventListener("keydown", function (e) { if (e.key === "Enter") attemptLogin(); });
+  });
+
+  logoutBtn.addEventListener("click", function () {
+    var tokenAtLogout = getSessionToken();
+    clearSession();
+    showLoginScreen("Logged out.");
+    if (tokenAtLogout) {
+      // Best-effort — tell the backend to invalidate this token server-side too, so it's
+      // dead everywhere immediately, not just cleared from this browser.
+      fetch(API_URL, { method: "POST", body: JSON.stringify({ op: "logout", token: tokenAtLogout }) }).catch(function () {});
     }
+  });
 
-    lockSubmit.addEventListener("click", tryUnlock);
-    lockInput.addEventListener("keydown", function (e) {
-      if (e.key === "Enter") tryUnlock();
-    });
-    setTimeout(function () { lockInput.focus(); }, 50);
+  // Boot check: a token found in localStorage proves nothing on its own — ask the
+  // backend to confirm it's still valid before ever showing the app.
+  (function () {
+    var stored = readSession();
+    if (!stored || !stored.token) { showLoginScreen(""); return; }
+    showLoginScreen("Checking your session…");
+    fetch(API_URL, { method: "POST", body: JSON.stringify({ op: "whoami", token: stored.token }) })
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (data && data.ok) {
+          setSession(stored.token, data.username, data.role);
+          showApp();
+        } else {
+          clearSession();
+          showLoginScreen("Please log in again.");
+        }
+      })
+      .catch(function () {
+        clearSession();
+        showLoginScreen("Couldn’t reach the server — please log in again.");
+      });
   })();
 
   var LOW_STOCK_THRESHOLD = 5;
   var EXPIRING_SOON_DAYS = 60;
 
   // ---- Live backend (Google Apps Script, bound to MASTER INVENTORY) ----
-  var API_URL = "https://script.google.com/macros/s/AKfycbwv7fLnDRlTQmEZDAXBNtG9JK9fHYsSqjlgQH7zFi9TP85beGW17FI9o3uVPpaa1xvw/exec";
-  var API_KEY = "GarNP-sVLsxgLDgbYTqoX9Vuq";
-
-  function apiGet(params) {
-    var url = API_URL + "?key=" + encodeURIComponent(API_KEY);
-    Object.keys(params || {}).forEach(function (k) {
-      url += "&" + encodeURIComponent(k) + "=" + encodeURIComponent(params[k]);
-    });
-    return fetch(url).then(function (res) { return res.json(); });
-  }
-
+  // There is no permanent shared secret here anymore (API_URL is declared up top, next
+  // to the session logic that needs it first). Every call attaches whatever session
+  // token login produced; the backend is the only thing that decides whether that
+  // token is real, unexpired, and allowed to do what's being asked.
   function apiPost(body) {
-    var payload = Object.assign({ key: API_KEY }, body);
+    var payload = Object.assign({}, body, { token: getSessionToken() });
     // No explicit Content-Type: keeps this a CORS-safelisted "simple request"
     // (browser defaults to text/plain), which avoids a blocked preflight OPTIONS call.
     return fetch(API_URL, { method: "POST", body: JSON.stringify(payload) })
-      .then(function (res) { return res.json(); });
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        // The backend — not this code's own guess — is what decides a session is no
+        // longer good. When it says so, drop the local session and show the login
+        // screen again; nothing here just assumes the user is still authenticated.
+        if (data && data.authError) {
+          clearSession();
+          showLoginScreen(data.error || "Your session expired — please log in again.");
+        }
+        return data;
+      });
   }
 
   // A sheet row with no real barcode might have the cell blank, or hold a placeholder
@@ -1063,14 +1169,14 @@
   }
 
   function apiLookup(code) {
-    return apiGet({ action: "lookup", barcode: code }).then(function (res) {
+    return apiPost({ op: "lookup", barcode: code }).then(function (res) {
       if (!res.ok) throw new Error(res.error || "Lookup failed.");
       return res.batches.map(toBatch);
     });
   }
 
   function apiAll() {
-    return apiGet({ action: "all" }).then(function (res) {
+    return apiPost({ op: "all" }).then(function (res) {
       if (!res.ok) throw new Error(res.error || "Could not load inventory.");
       return res.batches.map(toBatch);
     });
