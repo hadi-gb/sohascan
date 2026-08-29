@@ -605,6 +605,19 @@
     color: var(--text-muted);
     line-height: 1.4;
   }
+  .batch-tag {
+    display: inline-block;
+    font-size: 0.64rem;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 999px;
+    white-space: nowrap;
+    background: var(--info-soft);
+    color: var(--info);
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+  }
   .batch-actions {
     margin-top: 9px;
     display: flex;
@@ -1163,11 +1176,11 @@
     var qtyClass = qs.tone;
     var exClass = ex.tone;
     return '<div class="batch-row tone-' + tone + '">' +
+      (batch.notes ? '<span class="batch-tag">' + escapeHtml(batch.notes) + '</span>' : "") +
       '<div class="batch-stats">' +
         '<div class="stat ' + exClass + '"><div class="label">Expiry</div><div class="value">' + escapeHtml(ex.value) + '</div><div class="subvalue">' + escapeHtml(ex.sub) + '</div></div>' +
         '<div class="stat ' + qtyClass + '"><div class="label">Quantity</div><div class="value">' + escapeHtml(qs.value) + '</div><div class="subvalue">' + escapeHtml(qs.sub) + '</div></div>' +
       '</div>' +
-      (batch.notes ? '<p class="batch-notes">' + escapeHtml(batch.notes) + '</p>' : "") +
       banners +
     '</div>';
   }
