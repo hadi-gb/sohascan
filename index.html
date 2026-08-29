@@ -992,16 +992,29 @@
       .then(function (res) { return res.json(); });
   }
 
+  // A sheet row with no real barcode might have the cell blank, or hold a placeholder
+  // like "NO BARCODE" typed in so the row isn't empty. Either way it isn't a barcode —
+  // treat both the same so these rows are never mistaken for a real, shared code.
+  function isPlaceholderBarcode(raw) {
+    var s = String(raw || "").trim().toUpperCase().replace(/\s+/g, "");
+    return !s || s === "NOBARCODE" || s === "N/A" || s === "NA" || s === "NONE";
+  }
+
   function toBatch(r) {
     var mm = parseMMYYYY(r.expiryRaw);
     var brand = r.brand || "";
     var productOnly = r.product || "";
     var name = brand ? (brand + " — " + (productOnly || "(unnamed product)")) : (productOnly || "(unnamed product)");
+    var hasBarcode = !isPlaceholderBarcode(r.barcode);
     return {
       id: r.row,
       row: r.row,
       barcode: r.barcode,
-      hasBarcode: !!r.barcode,
+      hasBarcode: hasBarcode,
+      // Grouping key used to fold batches of the SAME product together. Real barcodes
+      // group as normal; rows with no real barcode never share a group key with each
+      // other, since each is its own distinct product, not another batch of the same one.
+      groupKey: hasBarcode ? String(r.barcode).trim().toUpperCase().replace(/\s+/g, "") : ("NOCODE-ROW-" + r.row),
       brand: brand,
       name: name,
       productOnly: productOnly || name,
@@ -1478,8 +1491,9 @@
     var byCode = {};
     var order = [];
     ACTIVE_BATCHES.forEach(function (b) {
-      if (!byCode[b.barcode]) { byCode[b.barcode] = { barcode: b.barcode, hasBarcode: b.hasBarcode, name: b.name, batches: [] }; order.push(b.barcode); }
-      byCode[b.barcode].batches.push(b);
+      var key = b.groupKey || b.barcode;
+      if (!byCode[key]) { byCode[key] = { barcode: b.barcode, hasBarcode: b.hasBarcode, name: b.name, batches: [] }; order.push(key); }
+      byCode[key].batches.push(b);
     });
     var rows = order.map(function (code) { return byCode[code]; });
     rows.forEach(function (r) {
@@ -1704,7 +1718,7 @@
       var expiry = expiryRaw ? parseFlexibleDate(expiryRaw) : null;
       var notes = idxNotes !== -1 ? (r[idxNotes] || "").trim() : "";
       batches.push({
-        id: i, barcode: barcodeKey, hasBarcode: hasBarcode, brand: brand, name: name,
+        id: i, barcode: barcodeKey, hasBarcode: hasBarcode, groupKey: barcodeKey, brand: brand, name: name,
         productOnly: productOnly || name, expiry: expiry, expiryRaw: expiryRaw, qty: qty,
         discount: "", notes: notes, row: i
       });
