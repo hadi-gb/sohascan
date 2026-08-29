@@ -192,33 +192,8 @@
     margin: 0 0 10px;
   }
 
-  /* Mode toggle */
-  .mode-toggle {
-    display: flex;
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 4px;
-    gap: 4px;
-  }
-  .mode-btn {
-    flex: 1;
-    background: transparent;
-    border: none;
-    color: var(--text-muted);
-    font-family: "Manrope", sans-serif;
-    font-weight: 700;
-    font-size: 0.82rem;
-    padding: 9px 8px;
-    border-radius: 9px;
-    cursor: pointer;
-  }
-  .mode-btn.active {
-    background: var(--accent);
-    color: var(--accent-contrast);
-  }
-  .mode-note {
-    margin: 8px 2px 0;
+  .scan-note {
+    margin: 0 2px 14px;
     font-size: 0.74rem;
     color: var(--text-muted);
     line-height: 1.4;
@@ -587,6 +562,24 @@
   .price-row .pvalue { font-family: "IBM Plex Mono", monospace; font-weight: 600; }
 
   .batch-list { display: flex; flex-direction: column; gap: 10px; }
+
+  .action-zone {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px dashed var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .readonly-note {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px dashed var(--border);
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    font-style: italic;
+    text-align: center;
+  }
   .batch-row {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -915,17 +908,9 @@
 
   <main>
    <div id="scanView">
-    <section aria-labelledby="mode-h">
-      <h2 id="mode-h">Mode</h2>
-      <div class="mode-toggle" role="group" aria-labelledby="mode-h">
-        <button class="mode-btn active" id="modeCheckBtn" type="button" data-mode="check">Scan to Check</button>
-        <button class="mode-btn" id="modeAddBtn" type="button" data-mode="add">Scan to Add</button>
-      </div>
-      <p class="mode-note" id="modeNote">Look up a barcode to see its expiry batches and quantity. Nothing is changed on this device.</p>
-    </section>
-
     <section aria-labelledby="scan-h">
       <h2 id="scan-h">Scan a barcode</h2>
+      <p class="scan-note">Scan or enter any barcode to see its details. Adding or adjusting stock happens from there, if your account can make changes.</p>
       <div class="scanner">
         <div class="viewfinder" id="viewfinder">
           <video id="video" playsinline muted></video>
@@ -1098,9 +1083,10 @@
   // whoami). Hides/limits controls a read-only account (e.g. role "viewer"/"guest")
   // can't actually use, per canWrite() above.
   function applyRolePermissions() {
-    var writeAllowed = canWrite();
-    if (els.modeAddBtn) els.modeAddBtn.hidden = !writeAllowed;
-    if (!writeAllowed && typeof mode !== "undefined" && mode === "add") setMode("check");
+    // The scan/check flow has no separate "mode" to hide anymore — the action button
+    // (or its absence) on the details screen is what reflects the role, so just
+    // re-render whatever's currently shown in case the role changed since it rendered.
+    if (typeof renderResult === "function") renderResult();
     if (typeof renderCatalog === "function" && els.catalog) renderCatalog();
   }
 
@@ -1268,7 +1254,6 @@
   var catalogLoading = false;
   var usingImported = false;
   var importedFilename = "";
-  var mode = "check"; // "check" | "add"
 
   var RECENT_KEY = "sohascan_recent_v1";
 
@@ -1277,7 +1262,6 @@
    "catalog","resultBody","recentList",
    "csvInput","resetBtn","importStatus","catalogSearch","catalogNote",
    "catalogYear","catalogMonth","catalogShowMore",
-   "modeCheckBtn","modeAddBtn","modeNote",
    "tabScanBtn","tabInventoryBtn","scanView","inventoryView"
   ].forEach(function (id) { els[id] = document.getElementById(id); });
 
@@ -1393,7 +1377,7 @@
     });
   }
 
-  // --- Check mode rendering ---
+  // --- One batch's read-only row within the details card ---
   function renderBatchRow(batch) {
     var ex = expiryState(batch.expiry);
     var qs = qtyState(batch);
@@ -1419,133 +1403,74 @@
     '</div>';
   }
 
-  function renderCheckResults(code, matches, opts) {
-    if (!matches.length) {
-      els.resultBody.innerHTML = '<div class="not-found">No match for <strong>' + escapeHtml(code) + '</strong> in MASTER INVENTORY. Switch to <strong>Scan to Add</strong> to create it, or check the code.</div>';
-      return;
-    }
-    var first = matches[0];
-    var html = '<div class="result-head">' +
-      '<div><h3>' + escapeHtml(first.name) + '</h3>' +
-      '<div class="result-cat">' + matches.length + ' batch' + (matches.length === 1 ? "" : "es") + ' on file' + '</div></div>' +
-      '<div class="result-code">' + escapeHtml(first.hasBarcode ? code : "no barcode") + '</div>' +
-    '</div>';
-    html += '<div class="price-row"><span class="plabel">Price</span><span class="pvalue">N/A &middot; Shopify not connected</span></div>';
-    html += '<div class="batch-list">' + matches.map(renderBatchRow).join("") + '</div>';
-    els.resultBody.innerHTML = html;
+  // --- Unified scan result ---
+  // One screen shows the details for whatever was scanned; there is no separate
+  // "mode" to pick first. If the account can write (canWrite(), see the session
+  // module above), an inline action to add a new lot or adjust an existing one
+  // appears on the same screen — no re-scanning needed to get to it.
+  var viewState = null; // { barcode, existing, loading, actionOpen, conflictBatch }
 
-    if (!opts.silent) {
-      var worst = "ok";
-      matches.forEach(function (b) {
-        var ex = expiryState(b.expiry), qs = qtyState(b);
-        worst = worstTone(worst, worstTone(ex.tone === "info" ? "ok" : ex.tone, qs.tone === "info" ? "ok" : qs.tone));
-      });
-      pushRecent({ barcode: code, name: first.name, tone: worst, ts: 0 });
-    }
-  }
-
-  function renderCheck(code, opts) {
-    opts = opts || {};
+  function showResult(code) {
     if (usingImported) {
-      renderCheckResults(code, sortBatches(batchesForBarcode(code)), opts);
+      viewState = { barcode: code, existing: sortBatches(batchesForBarcode(code)), loading: false, actionOpen: false, conflictBatch: null };
+      logRecentIfFound();
+      renderResult();
       return;
     }
-    els.resultBody.innerHTML = '<div class="add-card"><p class="add-sub">Looking up ' + escapeHtml(code) + ' on your sheet&hellip;</p></div>';
+    viewState = { barcode: code, existing: [], loading: true, actionOpen: false, conflictBatch: null };
+    renderResult();
     apiLookup(code).then(function (matches) {
-      renderCheckResults(code, sortBatches(matches), opts);
+      if (!viewState || viewState.barcode !== code) return; // superseded by a newer scan
+      viewState.existing = sortBatches(matches);
+      viewState.loading = false;
+      logRecentIfFound();
+      renderResult();
     }).catch(function (err) {
       els.resultBody.innerHTML = '<div class="not-found">Couldn&rsquo;t reach your sheet: ' + escapeHtml(err.message) + '. Check your connection and try again.</div>';
+      viewState = null;
     });
   }
 
-  // --- Add mode state & rendering ---
-  var addState = null; // { barcode, existing }
-
-  function startAdd(code) {
-    if (usingImported) {
-      addState = { barcode: code, existing: sortBatches(batchesForBarcode(code)), conflictBatch: null };
-      renderAdd();
-      return;
-    }
-    addState = { barcode: code, existing: [], conflictBatch: null, loading: true };
-    els.resultBody.innerHTML = '<div class="add-card"><p class="add-sub">Checking ' + escapeHtml(code) + ' against your sheet&hellip;</p></div>';
-    apiLookup(code).then(function (matches) {
-      if (!addState || addState.barcode !== code) return; // superseded by a newer scan
-      addState.existing = sortBatches(matches);
-      addState.loading = false;
-      renderAdd();
-    }).catch(function (err) {
-      els.resultBody.innerHTML = '<div class="not-found">Couldn&rsquo;t reach your sheet: ' + escapeHtml(err.message) + '.</div>';
-      addState = null;
+  // Logs this lookup to "recent scans" once, right when fresh results come back —
+  // not on every later re-render (opening the action panel, saving, a role change).
+  function logRecentIfFound() {
+    var s = viewState;
+    if (!s || !s.existing.length) return;
+    var worst = "ok";
+    s.existing.forEach(function (b) {
+      var ex = expiryState(b.expiry), qs = qtyState(b);
+      worst = worstTone(worst, worstTone(ex.tone === "info" ? "ok" : ex.tone, qs.tone === "info" ? "ok" : qs.tone));
     });
+    pushRecent({ barcode: s.barcode, name: s.existing[0].name, tone: worst, ts: 0 });
   }
 
-  function existingSummaryHtml(existing) {
-    if (!existing.length) return "";
-    var rows = existing.map(function (b) {
-      var ex = expiryState(b.expiry);
-      var qs = qtyState(b);
-      return ex.value + " &mdash; " + qs.value;
-    }).join("<br>");
-    return '<div class="existing-batches"><strong>Already on file (' + existing.length + '):</strong><br>' + rows + '</div>';
-  }
-
-  function renderAdd() {
-    if (!addState) {
-      els.resultBody.innerHTML = '<div class="add-card"><p class="add-sub">Scan or enter a barcode above to add a new batch or update an existing one.</p></div>';
-      return;
-    }
-    var s = addState;
+  function renderResult() {
+    var s = viewState;
+    if (!s) { els.resultBody.innerHTML = ""; return; }
     if (s.loading) {
-      els.resultBody.innerHTML = '<div class="add-card"><p class="add-sub">Checking ' + escapeHtml(s.barcode) + ' against your sheet&hellip;</p></div>';
+      els.resultBody.innerHTML = '<div class="add-card"><p class="add-sub">Looking up ' + escapeHtml(s.barcode) + ' on your sheet&hellip;</p></div>';
       return;
     }
-    var isNewProduct = s.existing.length === 0;
+    if (!s.existing.length) { renderNotFound(s); return; }
+    renderFoundDetails(s);
+  }
 
-    if (s.conflictBatch) {
-      var b = s.conflictBatch;
-      var qs = qtyState(b);
-      var html = '<div class="add-card">' +
-        '<h4>' + escapeHtml(b.name) + '</h4>' +
-        '<p class="add-sub">' + escapeHtml(s.barcode) + ' &middot; expiry ' + escapeHtml(formatMonthYear(b.expiry)) + '</p>' +
-        '<div class="conflict-box">This exact barcode + expiry batch already exists, currently showing <strong>' + escapeHtml(qs.value) + '</strong>' + (qs.verified ? "" : " (Shopify placeholder, not yet counted)") + '. How many units are you adjusting?</div>' +
-        '<div class="field"><label for="addDelta">Units</label><input id="addDelta" type="number" inputmode="numeric" min="1" value="1" class="mono-input"></div>' +
-        '<div class="form-actions">' +
-          '<button class="btn-primary btn-small" id="addToBtn" type="button">Add to it</button>' +
-          '<button class="btn-ghost btn-small" id="removeFromBtn" type="button">Remove from it</button>' +
-          '<button class="btn-ghost btn-small" id="cancelAddBtn" type="button">Cancel</button>' +
-        '</div>' +
-      '</div>';
-      els.resultBody.innerHTML = html;
-      document.getElementById("addToBtn").addEventListener("click", function () { applyDelta(1); });
-      document.getElementById("removeFromBtn").addEventListener("click", function () { applyDelta(-1); });
-      document.getElementById("cancelAddBtn").addEventListener("click", function () { addState.conflictBatch = null; renderAdd(); });
-      return;
-    }
-
-    var html2 = '<div class="add-card">';
-    if (isNewProduct) {
-      html2 += '<h4>New barcode - ' + escapeHtml(s.barcode) + '</h4><p class="add-sub">This barcode isn\'t in the inventory yet. Fill in the details to create it.</p>';
-      html2 += '<div class="field"><label for="addBrand">Brand</label><input id="addBrand" type="text" placeholder="e.g. EUCERIN"></div>';
-      html2 += '<div class="field"><label for="addName">Product name</label><input id="addName" type="text" placeholder="e.g. eye contour serum 15ML"></div>';
-    } else {
-      html2 += '<h4>' + escapeHtml(s.existing[0].name) + '</h4><p class="add-sub">' + escapeHtml(s.barcode) + '</p>';
-      html2 += existingSummaryHtml(s.existing);
-    }
-    html2 += '<div class="field"><label for="addExpiryMonth">Expiry</label>' +
+  // Shared expiry / quantity / notes fields, used both for a brand-new barcode and
+  // for adding a lot to (or adjusting) a barcode that already has other batches.
+  function expiryQtyNotesFieldsHtml() {
+    return '<div class="field"><label for="addExpiryMonth">Expiry</label>' +
       '<div class="expiry-inputs">' +
         '<input id="addExpiryMonth" type="text" inputmode="numeric" placeholder="MM" maxlength="2" class="mono-input expiry-mm">' +
         '<span class="expiry-sep">/</span>' +
         '<input id="addExpiryYear" type="text" inputmode="numeric" placeholder="YYYY" maxlength="4" class="mono-input expiry-yyyy">' +
-      '</div></div>';
-    html2 += '<div class="field"><label for="addQty">Quantity counted</label><input id="addQty" type="number" inputmode="numeric" min="0" value="0" class="mono-input"></div>';
-    html2 += '<div class="field"><label for="addNotes">Notes (optional)</label><textarea id="addNotes" placeholder="e.g. near-expiry shelf, back stock&hellip;"></textarea></div>';
-    html2 += '<div class="form-actions"><button class="btn-primary" id="submitAddBtn" type="button">Save to inventory</button></div>';
-    html2 += '</div>';
-    els.resultBody.innerHTML = html2;
-    document.getElementById("submitAddBtn").addEventListener("click", submitAddForm);
-    // Separate MM / YYYY inputs sidestep the numeric keypad having no "-" key,
-    // and avoid guessing where month digits end and year digits begin.
+      '</div></div>' +
+      '<div class="field"><label for="addQty">Quantity counted</label><input id="addQty" type="number" inputmode="numeric" min="0" value="0" class="mono-input"></div>' +
+      '<div class="field"><label for="addNotes">Notes (optional)</label><textarea id="addNotes" placeholder="e.g. near-expiry shelf, back stock&hellip;"></textarea></div>';
+  }
+
+  // Separate MM / YYYY inputs sidestep the numeric keypad having no "-" key,
+  // and avoid guessing where month digits end and year digits begin.
+  function wireExpiryInputs() {
     var mmEl = document.getElementById("addExpiryMonth");
     var yyEl = document.getElementById("addExpiryYear");
     if (mmEl && yyEl) {
@@ -1559,6 +1484,86 @@
     }
   }
 
+  function renderNotFound(s) {
+    var writeAllowed = canWrite();
+    var html = '<div class="not-found">No match for <strong>' + escapeHtml(s.barcode) + '</strong> in MASTER INVENTORY.' +
+      (writeAllowed ? ' Fill in the details below to add it.' : ' Ask a warehouse admin to add it.') +
+      '</div>';
+    if (writeAllowed) {
+      html += '<div class="add-card">' +
+        '<h4>New barcode &mdash; ' + escapeHtml(s.barcode) + '</h4>' +
+        '<div class="field"><label for="addBrand">Brand</label><input id="addBrand" type="text" placeholder="e.g. EUCERIN"></div>' +
+        '<div class="field"><label for="addName">Product name</label><input id="addName" type="text" placeholder="e.g. eye contour serum 15ML"></div>' +
+        expiryQtyNotesFieldsHtml() +
+        '<div class="form-actions"><button class="btn-primary" id="submitAddBtn" type="button">Save to inventory</button></div>' +
+      '</div>';
+    }
+    els.resultBody.innerHTML = html;
+    if (writeAllowed) {
+      document.getElementById("submitAddBtn").addEventListener("click", submitAddForm);
+      wireExpiryInputs();
+    }
+  }
+
+  function renderFoundDetails(s) {
+    var first = s.existing[0];
+    var html = '<div class="result-head">' +
+      '<div><h3>' + escapeHtml(first.name) + '</h3>' +
+      '<div class="result-cat">' + s.existing.length + ' batch' + (s.existing.length === 1 ? "" : "es") + ' on file' + '</div></div>' +
+      '<div class="result-code">' + escapeHtml(first.hasBarcode ? s.barcode : "no barcode") + '</div>' +
+    '</div>';
+    html += '<div class="price-row"><span class="plabel">Price</span><span class="pvalue">N/A &middot; Shopify not connected</span></div>';
+    html += '<div class="batch-list">' + s.existing.map(renderBatchRow).join("") + '</div>';
+
+    if (!canWrite()) {
+      html += '<p class="readonly-note">Read-only account &mdash; ask a warehouse admin to make changes.</p>';
+      els.resultBody.innerHTML = html;
+      return;
+    }
+
+    if (s.conflictBatch) {
+      var b = s.conflictBatch;
+      var qs = qtyState(b);
+      html += '<div class="action-zone"><div class="add-card">' +
+        '<h4>' + escapeHtml(b.name) + '</h4>' +
+        '<p class="add-sub">expiry ' + escapeHtml(formatMonthYear(b.expiry)) + '</p>' +
+        '<div class="conflict-box">This exact expiry batch already exists, currently showing <strong>' + escapeHtml(qs.value) + '</strong>' + (qs.verified ? "" : " (Shopify placeholder, not yet counted)") + '. How many units are you adjusting?</div>' +
+        '<div class="field"><label for="addDelta">Units</label><input id="addDelta" type="number" inputmode="numeric" min="1" value="1" class="mono-input"></div>' +
+        '<div class="form-actions">' +
+          '<button class="btn-primary btn-small" id="addToBtn" type="button">Add to it</button>' +
+          '<button class="btn-ghost btn-small" id="removeFromBtn" type="button">Remove from it</button>' +
+          '<button class="btn-ghost btn-small" id="cancelAddBtn" type="button">Cancel</button>' +
+        '</div>' +
+      '</div></div>';
+      els.resultBody.innerHTML = html;
+      document.getElementById("addToBtn").addEventListener("click", function () { applyDelta(1); });
+      document.getElementById("removeFromBtn").addEventListener("click", function () { applyDelta(-1); });
+      document.getElementById("cancelAddBtn").addEventListener("click", function () { s.conflictBatch = null; renderResult(); });
+      return;
+    }
+
+    if (s.actionOpen) {
+      html += '<div class="action-zone"><div class="add-card">' +
+        '<h4>Add a new lot, or adjust one above</h4>' +
+        '<p class="add-sub">Enter the expiry you&rsquo;re working with &mdash; matching one already on file adjusts it, otherwise it&rsquo;s added as a new lot.</p>' +
+        expiryQtyNotesFieldsHtml() +
+        '<div class="form-actions">' +
+          '<button class="btn-ghost btn-small" id="cancelActionBtn" type="button">Cancel</button>' +
+          '<button class="btn-primary" id="submitAddBtn" type="button">Save to inventory</button>' +
+        '</div>' +
+      '</div></div>';
+      els.resultBody.innerHTML = html;
+      document.getElementById("submitAddBtn").addEventListener("click", submitAddForm);
+      document.getElementById("cancelActionBtn").addEventListener("click", function () { s.actionOpen = false; renderResult(); });
+      wireExpiryInputs();
+      return;
+    }
+
+    html += '<div class="action-zone"><button class="btn-primary" id="openActionBtn" type="button">+ Add new lot / adjust quantity</button></div>';
+    els.resultBody.innerHTML = html;
+    document.getElementById("openActionBtn").addEventListener("click", function () { s.actionOpen = true; renderResult(); });
+  }
+
   function parseMMYYYY(raw) {
     var s = String(raw || "").trim();
     var m = s.match(/^(\d{1,2})\s*[-\/]\s*(\d{4})$/) || s.match(/^(\d{2})(\d{4})$/);
@@ -1570,7 +1575,7 @@
   }
 
   function submitAddForm() {
-    var s = addState;
+    var s = viewState;
     var isNewProduct = s.existing.length === 0;
     var expiryInput = document.getElementById("addExpiryMonth").value + "-" + document.getElementById("addExpiryYear").value;
     var qtyInput = document.getElementById("addQty").value;
@@ -1601,7 +1606,7 @@
     var exactMatch = s.existing.find(function (b) { return b.expiry === parsed.iso; });
     if (exactMatch) {
       s.conflictBatch = exactMatch;
-      renderAdd();
+      renderResult();
       return;
     }
 
@@ -1615,7 +1620,7 @@
       var label0 = isNewProduct ? "New product added" : "New batch (lot) added";
       els.resultBody.innerHTML = '<div class="add-card"><h4>' + escapeHtml(label0) + '</h4><p class="add-sub">' + escapeHtml(name) + ' &middot; expiry ' + escapeHtml(parsed.raw) + ' &middot; qty ' + (qtyNum === null ? "N/A" : qtyNum) + '</p><p class="add-sub">Test file only — not written to your real sheet.</p></div>';
       pushRecent({ barcode: s.barcode, name: name, tone: "ok", ts: 0 });
-      addState = null;
+      viewState = null;
       renderCatalog();
       return;
     }
@@ -1636,7 +1641,7 @@
       var label = isNewProduct ? "New product added" : "New batch (lot) added";
       els.resultBody.innerHTML = '<div class="add-card"><h4>' + escapeHtml(label) + '</h4><p class="add-sub">' + escapeHtml(name) + ' &middot; expiry ' + escapeHtml(parsed.raw) + ' &middot; qty ' + (qtyNum === null ? "N/A" : qtyNum) + '</p><p class="add-sub">Saved to your MASTER INVENTORY sheet.</p></div>';
       pushRecent({ barcode: s.barcode, name: name, tone: "ok", ts: 0 });
-      addState = null;
+      viewState = null;
       refreshCatalog();
     }).catch(function (err) {
       alert("Couldn’t save to the sheet: " + err.message);
@@ -1645,7 +1650,7 @@
   }
 
   function applyDelta(sign) {
-    var s = addState;
+    var s = viewState;
     var b = s.conflictBatch;
     var deltaInput = document.getElementById("addDelta").value;
     var delta = Number(deltaInput);
@@ -1657,7 +1662,7 @@
       b.qty = updated0;
       els.resultBody.innerHTML = '<div class="add-card"><h4>Updated</h4><p class="add-sub">' + escapeHtml(b.name) + ' &middot; expiry ' + escapeHtml(formatMonthYear(b.expiry)) + ' &middot; now ' + updated0 + ' units</p><p class="add-sub">Test file only — not written to your real sheet.</p></div>';
       pushRecent({ barcode: b.barcode, name: b.name, tone: qtyState(b).tone === "info" ? "ok" : qtyState(b).tone, ts: 0 });
-      addState = null;
+      viewState = null;
       renderCatalog();
       return;
     }
@@ -1668,7 +1673,7 @@
       var tone = updated <= 0 ? "critical" : (updated <= LOW_STOCK_THRESHOLD ? "warn" : "ok");
       els.resultBody.innerHTML = '<div class="add-card"><h4>Updated</h4><p class="add-sub">' + escapeHtml(b.name) + ' &middot; expiry ' + escapeHtml(formatMonthYear(b.expiry)) + ' &middot; now ' + updated + ' units</p><p class="add-sub">Saved to your MASTER INVENTORY sheet.</p></div>';
       pushRecent({ barcode: b.barcode, name: b.name, tone: tone, ts: 0 });
-      addState = null;
+      viewState = null;
       refreshCatalog();
     }).catch(function (err) {
       alert("Couldn’t update the sheet: " + err.message);
@@ -1679,28 +1684,8 @@
   function handleCode(rawCode) {
     var code = (rawCode || "").trim();
     if (!code) return;
-    if (mode === "add") {
-      if (!canWrite()) { setMode("check"); renderCheck(code); return; }
-      startAdd(code);
-    }
-    else renderCheck(code);
+    showResult(code);
   }
-
-  function setMode(next) {
-    mode = next;
-    els.modeCheckBtn.classList.toggle("active", mode === "check");
-    els.modeAddBtn.classList.toggle("active", mode === "add");
-    els.modeNote.textContent = mode === "check"
-      ? "Look up a barcode to see its expiry batches and quantity. Nothing is changed on this device."
-      : "Scan or enter a barcode to add a new batch, log a new expiry lot, or adjust the count on an existing batch.";
-    addState = null;
-    els.resultBody.innerHTML = mode === "add"
-      ? '<div class="add-card"><p class="add-sub">Scan or enter a barcode above to add a new batch or update an existing one.</p></div>'
-      : "";
-  }
-
-  els.modeCheckBtn.addEventListener("click", function () { setMode("check"); });
-  els.modeAddBtn.addEventListener("click", function () { setMode("add"); });
 
   els.manualForm.addEventListener("submit", function (e) {
     e.preventDefault();
@@ -1858,7 +1843,6 @@
         card.querySelector(".inv-inc").addEventListener("click", function () { inventoryAdjust(single, 1, deltaInputEl); });
       } else if (!single) {
         card.addEventListener("click", function () {
-          setMode("check");
           setTab("scan");
           handleCode(p.barcode);
         });
@@ -2158,6 +2142,5 @@
 
   refreshCatalog();
   renderRecent();
-  setMode("check");
 })();
 </script>
