@@ -1025,11 +1025,31 @@
     try { localStorage.removeItem(SESSION_KEY); } catch (e) {}
   }
 
+  // Mirrors the backend's own rule (doPost: append/adjust require "warehouse" or "admin")
+  // so the UI hides controls that would just be rejected server-side anyway. This is a
+  // convenience for the user, not the actual security boundary — that's enforced by the
+  // backend regardless of what this returns.
+  function canWrite() {
+    var s = readSession();
+    return !!(s && (s.role === "warehouse" || s.role === "admin"));
+  }
+
+  // Called once the app is shown (fresh login or a restored session confirmed by
+  // whoami). Hides/limits controls a read-only account (e.g. role "viewer"/"guest")
+  // can't actually use, per canWrite() above.
+  function applyRolePermissions() {
+    var writeAllowed = canWrite();
+    if (els.modeAddBtn) els.modeAddBtn.hidden = !writeAllowed;
+    if (!writeAllowed && typeof mode !== "undefined" && mode === "add") setMode("check");
+    if (typeof renderCatalog === "function" && els.catalog) renderCatalog();
+  }
+
   function showApp() {
     var s = readSession();
     lockScreen.hidden = true;
     sessionBar.hidden = false;
     sessionUserLabel.textContent = s ? (s.username + (s.role === "admin" ? " · admin" : "")) : "";
+    applyRolePermissions();
   }
 
   function showLoginScreen(message) {
@@ -1599,7 +1619,10 @@
   function handleCode(rawCode) {
     var code = (rawCode || "").trim();
     if (!code) return;
-    if (mode === "add") startAdd(code);
+    if (mode === "add") {
+      if (!canWrite()) { setMode("check"); renderCheck(code); return; }
+      startAdd(code);
+    }
     else renderCheck(code);
   }
 
@@ -1679,6 +1702,7 @@
   }
 
   function inventoryAdjust(batch, sign, deltaInputEl) {
+    if (!canWrite()) return; // read-only account — matching controls are hidden, this is just a backstop
     if (inventoryBusyRow === batch.row) return;
     var delta = Number(deltaInputEl.value);
     if (!delta || isNaN(delta) || delta <= 0) { alert("Enter a positive number of units."); return; }
@@ -1767,12 +1791,12 @@
         '<div class="inv-code">' + escapeHtml(p.hasBarcode ? p.barcode : "no barcode") + '</div>' +
         '<div class="inv-badges">' + badges + '</div>' +
         '</div>' +
-        (single ? inventoryStepperHtml(single) : '<span class="inv-chev">›</span>');
-      if (single) {
+        (single ? (canWrite() ? inventoryStepperHtml(single) : "") : '<span class="inv-chev">›</span>');
+      if (single && canWrite()) {
         var deltaInputEl = card.querySelector(".inv-delta");
         card.querySelector(".inv-dec").addEventListener("click", function () { inventoryAdjust(single, -1, deltaInputEl); });
         card.querySelector(".inv-inc").addEventListener("click", function () { inventoryAdjust(single, 1, deltaInputEl); });
-      } else {
+      } else if (!single) {
         card.addEventListener("click", function () {
           setMode("check");
           setTab("scan");
