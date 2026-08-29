@@ -590,6 +590,64 @@
   .batch-row.tone-ok { border-left-color: var(--ok); }
   .batch-row.tone-warn { border-left-color: var(--warn); }
   .batch-row.tone-critical { border-left-color: var(--critical); }
+  .batch-row.editing { background: var(--surface-2); }
+
+  .batch-row-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .edit-link {
+    margin-left: auto;
+    flex-shrink: 0;
+    background: transparent;
+    border: none;
+    padding: 4px 9px;
+    border-radius: 8px;
+    font-family: "Manrope", sans-serif;
+    font-weight: 700;
+    font-size: 0.72rem;
+    color: var(--accent);
+  }
+  .edit-link:hover { background: var(--surface-2); }
+  .edit-link.active { background: var(--accent); color: var(--accent-contrast); }
+
+  .inline-panel {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--border);
+  }
+  .qty-stepper {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .qty-stepper button {
+    width: 34px;
+    height: 34px;
+    flex-shrink: 0;
+    border-radius: 9px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text);
+    font-size: 16px;
+    font-weight: 700;
+    line-height: 1;
+  }
+  .qty-stepper input {
+    flex: 1;
+    min-width: 0;
+    text-align: center;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.9rem;
+    font-weight: 600;
+    padding: 9px 8px;
+    border-radius: 9px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+  }
 
   .batch-stats {
     display: grid;
@@ -1377,8 +1435,10 @@
     });
   }
 
-  // --- One batch's read-only row within the details card ---
-  function renderBatchRow(batch) {
+  // --- One batch's row within the details card. Writers get an "Edit" link that
+  // opens an inline panel (qty stepper + notes) scoped to just this batch, right
+  // under its own row — no need to retype the expiry to reach it. ---
+  function renderBatchRow(batch, s) {
     var ex = expiryState(batch.expiry);
     var qs = qtyState(batch);
     var tone = worstTone(ex.tone === "info" ? "ok" : ex.tone, qs.tone === "info" ? "ok" : qs.tone);
@@ -1393,31 +1453,67 @@
     }
     var qtyClass = qs.tone;
     var exClass = ex.tone;
-    return '<div class="batch-row tone-' + tone + '">' +
-      (batch.notes ? '<span class="batch-tag">' + escapeHtml(batch.notes) + '</span>' : "") +
+
+    // Editing an existing batch and adding a brand-new expiry are kept as separate,
+    // mutually exclusive actions — the Edit link only appears when neither the
+    // "add a new expiry" form nor the (legacy) conflict box is already open.
+    var editingAllowed = canWrite() && s && !s.actionOpen;
+    var isEditing = editingAllowed && s.editBatch && s.editBatch.id === batch.id;
+    var headHtml = "";
+    if (batch.notes || editingAllowed) {
+      headHtml = '<div class="batch-row-head">' +
+        (batch.notes ? '<span class="batch-tag">' + escapeHtml(batch.notes) + '</span>' : "") +
+        (editingAllowed ? '<button type="button" class="edit-link' + (isEditing ? " active" : "") + '" data-edit-id="' + escapeHtml(String(batch.id)) + '">' + (isEditing ? "Editing&hellip;" : "Edit") + '</button>' : "") +
+      '</div>';
+    }
+
+    return '<div class="batch-row tone-' + tone + (isEditing ? " editing" : "") + '">' +
+      headHtml +
       '<div class="batch-stats">' +
         '<div class="stat ' + exClass + '"><div class="label">Expiry</div><div class="value">' + escapeHtml(ex.value) + '</div><div class="subvalue">' + escapeHtml(ex.sub) + '</div></div>' +
         '<div class="stat ' + qtyClass + '"><div class="label">Quantity</div><div class="value">' + escapeHtml(qs.value) + '</div><div class="subvalue">' + escapeHtml(qs.sub) + '</div></div>' +
       '</div>' +
       banners +
+      (isEditing ? renderEditPanelHtml(batch) : "") +
+    '</div>';
+  }
+
+  // Inline qty + notes editor for one specific batch. The stepper only mutates the
+  // input locally; the actual save (and its network round trip) happens on Save.
+  function renderEditPanelHtml(batch) {
+    var currentQty = (batch.qty === null || batch.qty === undefined) ? 0 : Number(batch.qty);
+    return '<div class="inline-panel">' +
+      '<div class="field"><label for="editQty">Quantity</label>' +
+        '<div class="qty-stepper">' +
+          '<button type="button" id="editQtyDec">&minus;</button>' +
+          '<input id="editQty" type="number" inputmode="numeric" min="0" value="' + currentQty + '">' +
+          '<button type="button" id="editQtyInc">+</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="field"><label for="editNotes">Notes</label><textarea id="editNotes" placeholder="e.g. near-expiry shelf, back stock&hellip;">' + escapeHtml(batch.notes || "") + '</textarea></div>' +
+      '<div class="form-actions">' +
+        '<button class="btn-ghost btn-small" id="cancelEditBtn" type="button">Cancel</button>' +
+        '<button class="btn-primary btn-small" id="saveEditBtn" type="button">Save</button>' +
+      '</div>' +
     '</div>';
   }
 
   // --- Unified scan result ---
   // One screen shows the details for whatever was scanned; there is no separate
   // "mode" to pick first. If the account can write (canWrite(), see the session
-  // module above), an inline action to add a new lot or adjust an existing one
-  // appears on the same screen — no re-scanning needed to get to it.
-  var viewState = null; // { barcode, existing, loading, actionOpen, conflictBatch }
+  // module above), each existing batch can be edited directly (qty + notes) via
+  // its own Edit link, and adding a genuinely new expiry is a separate action —
+  // no re-scanning needed to reach either.
+  var viewState = null; // { barcode, existing, loading, actionOpen, editBatch }
 
   function showResult(code) {
     if (usingImported) {
-      viewState = { barcode: code, existing: sortBatches(batchesForBarcode(code)), loading: false, actionOpen: false, conflictBatch: null };
+      viewState = { barcode: code, existing: sortBatches(batchesForBarcode(code)), loading: false, actionOpen: false, editBatch: null };
       logRecentIfFound();
       renderResult();
       return;
     }
-    viewState = { barcode: code, existing: [], loading: true, actionOpen: false, conflictBatch: null };
+    viewState = { barcode: code, existing: [], loading: true, actionOpen: false, editBatch: null };
     renderResult();
     apiLookup(code).then(function (matches) {
       if (!viewState || viewState.barcode !== code) return; // superseded by a newer scan
@@ -1513,7 +1609,7 @@
       '<div class="result-code">' + escapeHtml(first.hasBarcode ? s.barcode : "no barcode") + '</div>' +
     '</div>';
     html += '<div class="price-row"><span class="plabel">Price</span><span class="pvalue">N/A &middot; Shopify not connected</span></div>';
-    html += '<div class="batch-list">' + s.existing.map(renderBatchRow).join("") + '</div>';
+    html += '<div class="batch-list">' + s.existing.map(function (b) { return renderBatchRow(b, s); }).join("") + '</div>';
 
     if (!canWrite()) {
       html += '<p class="readonly-note">Read-only account &mdash; ask a warehouse admin to make changes.</p>';
@@ -1521,31 +1617,10 @@
       return;
     }
 
-    if (s.conflictBatch) {
-      var b = s.conflictBatch;
-      var qs = qtyState(b);
-      html += '<div class="action-zone"><div class="add-card">' +
-        '<h4>' + escapeHtml(b.name) + '</h4>' +
-        '<p class="add-sub">expiry ' + escapeHtml(formatMonthYear(b.expiry)) + '</p>' +
-        '<div class="conflict-box">This exact expiry batch already exists, currently showing <strong>' + escapeHtml(qs.value) + '</strong>' + (qs.verified ? "" : " (Shopify placeholder, not yet counted)") + '. How many units are you adjusting?</div>' +
-        '<div class="field"><label for="addDelta">Units</label><input id="addDelta" type="number" inputmode="numeric" min="1" value="1" class="mono-input"></div>' +
-        '<div class="form-actions">' +
-          '<button class="btn-primary btn-small" id="addToBtn" type="button">Add to it</button>' +
-          '<button class="btn-ghost btn-small" id="removeFromBtn" type="button">Remove from it</button>' +
-          '<button class="btn-ghost btn-small" id="cancelAddBtn" type="button">Cancel</button>' +
-        '</div>' +
-      '</div></div>';
-      els.resultBody.innerHTML = html;
-      document.getElementById("addToBtn").addEventListener("click", function () { applyDelta(1); });
-      document.getElementById("removeFromBtn").addEventListener("click", function () { applyDelta(-1); });
-      document.getElementById("cancelAddBtn").addEventListener("click", function () { s.conflictBatch = null; renderResult(); });
-      return;
-    }
-
     if (s.actionOpen) {
       html += '<div class="action-zone"><div class="add-card">' +
-        '<h4>Add a new lot, or adjust one above</h4>' +
-        '<p class="add-sub">Enter the expiry you&rsquo;re working with &mdash; matching one already on file adjusts it, otherwise it&rsquo;s added as a new lot.</p>' +
+        '<h4>Add a new expiry lot</h4>' +
+        '<p class="add-sub">This creates a brand-new batch row &mdash; separate from editing one above.</p>' +
         expiryQtyNotesFieldsHtml() +
         '<div class="form-actions">' +
           '<button class="btn-ghost btn-small" id="cancelActionBtn" type="button">Cancel</button>' +
@@ -1556,12 +1631,52 @@
       document.getElementById("submitAddBtn").addEventListener("click", submitAddForm);
       document.getElementById("cancelActionBtn").addEventListener("click", function () { s.actionOpen = false; renderResult(); });
       wireExpiryInputs();
+      wireBatchEditLinks(s);
       return;
     }
 
-    html += '<div class="action-zone"><button class="btn-primary" id="openActionBtn" type="button">+ Add new lot / adjust quantity</button></div>';
+    var addBtnDisabled = !!s.editBatch;
+    html += '<div class="action-zone"><button class="btn-primary" id="openActionBtn" type="button"' + (addBtnDisabled ? " disabled" : "") + '>+ Add a new expiry</button></div>';
     els.resultBody.innerHTML = html;
-    document.getElementById("openActionBtn").addEventListener("click", function () { s.actionOpen = true; renderResult(); });
+    if (!addBtnDisabled) {
+      document.getElementById("openActionBtn").addEventListener("click", function () { s.actionOpen = true; renderResult(); });
+    }
+    wireBatchEditLinks(s);
+    if (s.editBatch) wireEditPanel(s);
+  }
+
+  // Clicking a batch row's Edit link opens (or switches to) that row's inline panel.
+  function wireBatchEditLinks(s) {
+    var links = els.resultBody.querySelectorAll(".edit-link");
+    for (var i = 0; i < links.length; i++) {
+      (function (btn) {
+        btn.addEventListener("click", function () {
+          var id = btn.getAttribute("data-edit-id");
+          var match = s.existing.find(function (b) { return String(b.id) === id; });
+          if (!match) return;
+          s.editBatch = match;
+          renderResult();
+        });
+      })(links[i]);
+    }
+  }
+
+  // Wires the stepper + Cancel/Save controls inside the one open edit panel.
+  function wireEditPanel(s) {
+    var qtyEl = document.getElementById("editQty");
+    document.getElementById("editQtyDec").addEventListener("click", function () {
+      var v = Math.max(0, (parseInt(qtyEl.value, 10) || 0) - 1);
+      qtyEl.value = v;
+    });
+    document.getElementById("editQtyInc").addEventListener("click", function () {
+      var v = (parseInt(qtyEl.value, 10) || 0) + 1;
+      qtyEl.value = v;
+    });
+    document.getElementById("cancelEditBtn").addEventListener("click", function () {
+      s.editBatch = null;
+      renderResult();
+    });
+    document.getElementById("saveEditBtn").addEventListener("click", saveEditPanel);
   }
 
   function parseMMYYYY(raw) {
@@ -1605,8 +1720,7 @@
 
     var exactMatch = s.existing.find(function (b) { return b.expiry === parsed.iso; });
     if (exactMatch) {
-      s.conflictBatch = exactMatch;
-      renderResult();
+      alert('That expiry (' + parsed.raw + ') is already on file for this product — use the Edit link on that batch above to change its quantity or notes.');
       return;
     }
 
@@ -1649,34 +1763,61 @@
     });
   }
 
-  function applyDelta(sign) {
+  // Saves the inline edit panel for one specific batch — quantity, notes, or both.
+  // The stepper's on-screen value is turned into a delta from the batch's last-known
+  // qty (not sent as an absolute number), so the same safe read-current-then-apply-
+  // delta math used everywhere else in the app still protects against a concurrent
+  // edit from another device.
+  function saveEditPanel() {
     var s = viewState;
-    var b = s.conflictBatch;
-    var deltaInput = document.getElementById("addDelta").value;
-    var delta = Number(deltaInput);
-    if (isNaN(delta) || delta <= 0) { alert("Enter a positive number of units."); return; }
+    var b = s.editBatch;
+    if (!b) return;
+    var qtyRaw = document.getElementById("editQty").value;
+    var notesRaw = document.getElementById("editNotes").value;
+    var newQty = Number(qtyRaw);
+    if (qtyRaw === "" || isNaN(newQty) || newQty < 0) { alert("Quantity should be zero or a positive number."); return; }
+
+    var originalQty = (b.qty === null || b.qty === undefined) ? 0 : Number(b.qty);
+    var delta = newQty - originalQty;
+    var notesTrimmed = notesRaw.trim();
+    var notesChanged = notesTrimmed !== (b.notes || "");
+
+    if (delta === 0 && !notesChanged) {
+      s.editBatch = null;
+      renderResult();
+      return;
+    }
 
     if (usingImported) {
-      var current = (b.qty === null || b.qty === undefined) ? 0 : Number(b.qty);
-      var updated0 = sign > 0 ? current + delta : Math.max(0, current - delta);
-      b.qty = updated0;
-      els.resultBody.innerHTML = '<div class="add-card"><h4>Updated</h4><p class="add-sub">' + escapeHtml(b.name) + ' &middot; expiry ' + escapeHtml(formatMonthYear(b.expiry)) + ' &middot; now ' + updated0 + ' units</p><p class="add-sub">Test file only — not written to your real sheet.</p></div>';
-      pushRecent({ barcode: b.barcode, name: b.name, tone: qtyState(b).tone === "info" ? "ok" : qtyState(b).tone, ts: 0 });
+      b.qty = newQty;
+      b.notes = notesTrimmed;
+      var tone0 = qtyState(b).tone === "info" ? "ok" : qtyState(b).tone;
+      els.resultBody.innerHTML = '<div class="add-card"><h4>Updated</h4><p class="add-sub">' + escapeHtml(b.name) + ' &middot; expiry ' + escapeHtml(formatMonthYear(b.expiry)) + ' &middot; now ' + newQty + ' units</p><p class="add-sub">Test file only — not written to your real sheet.</p></div>';
+      pushRecent({ barcode: b.barcode, name: b.name, tone: tone0, ts: 0 });
       viewState = null;
       renderCatalog();
       return;
     }
 
-    apiPost({ op: "adjust", row: b.row, barcode: b.barcode, delta: delta, sign: sign }).then(function (res) {
+    var saveBtn = document.getElementById("saveEditBtn");
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Saving…"; }
+
+    var payload = { op: "adjust", row: b.row, barcode: b.barcode };
+    if (delta !== 0) { payload.delta = Math.abs(delta); payload.sign = delta > 0 ? 1 : -1; }
+    if (notesChanged) { payload.notes = notesTrimmed; }
+
+    apiPost(payload).then(function (res) {
       if (!res.ok) throw new Error(res.error || "Could not update.");
-      var updated = res.newQty;
-      var tone = updated <= 0 ? "critical" : (updated <= LOW_STOCK_THRESHOLD ? "warn" : "ok");
-      els.resultBody.innerHTML = '<div class="add-card"><h4>Updated</h4><p class="add-sub">' + escapeHtml(b.name) + ' &middot; expiry ' + escapeHtml(formatMonthYear(b.expiry)) + ' &middot; now ' + updated + ' units</p><p class="add-sub">Saved to your MASTER INVENTORY sheet.</p></div>';
+      b.qty = (res.newQty === null || res.newQty === undefined) ? newQty : res.newQty;
+      if (notesChanged) b.notes = notesTrimmed;
+      var tone = qtyState(b).tone === "info" ? "ok" : qtyState(b).tone;
+      els.resultBody.innerHTML = '<div class="add-card"><h4>Updated</h4><p class="add-sub">' + escapeHtml(b.name) + ' &middot; expiry ' + escapeHtml(formatMonthYear(b.expiry)) + ' &middot; now ' + b.qty + ' units</p><p class="add-sub">Saved to your MASTER INVENTORY sheet.</p></div>';
       pushRecent({ barcode: b.barcode, name: b.name, tone: tone, ts: 0 });
       viewState = null;
       refreshCatalog();
     }).catch(function (err) {
-      alert("Couldn’t update the sheet: " + err.message);
+      alert("Couldn’t save to the sheet: " + err.message);
+      if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = "Save"; }
     });
   }
 
