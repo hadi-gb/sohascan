@@ -2,7 +2,7 @@
 
 A live barcode inventory app built to replace manual stock counting on the warehouse floor — scan a barcode, see everything about it, add or adjust stock right there, with real accounts and a full audit trail behind it.
 
-![ScanCare — scan a barcode and see full details, edit inline](screenshots/03-scan-details.png)
+![ScanCare — scan a barcode and see full details, edit inline](screenshots/screenshots/03-scan-details.png)
 
 ## Why I built this
 
@@ -25,11 +25,11 @@ It's been in daily use since it shipped, and every feature in here came from an 
 
 | Scan and edit a batch inline | Rename a product | Browse and search inventory |
 |---|---|---|
-| ![Editing a batch's quantity and notes inline](screenshots/04-edit-batch.png) | ![Renaming a product's brand and name](screenshots/07-rename-product.png) | ![Inventory list sorted by nearest expiry](screenshots/06-inventory-list.png) |
+| ![Editing a batch's quantity and notes inline](screenshots/screenshots/04-edit-batch.png) | ![Renaming a product's brand and name](screenshots/screenshots/07-rename-product.png) | ![Inventory list sorted by nearest expiry](screenshots/screenshots/06-inventory-list.png) |
 
 | Add a new expiry lot | Read-only account view | Light / dark mode |
 |---|---|---|
-| ![Adding a brand-new expiry as a separate action](screenshots/05-add-new-expiry.png) | ![A viewer/read-only account sees no edit controls](screenshots/08-readonly-viewer.png) | ![Login screen in light and dark mode](screenshots/01-login-light.png) |
+| ![Adding a brand-new expiry as a separate action](screenshots/screenshots/05-add-new-expiry.png) | ![A viewer/read-only account sees no edit controls](screenshots/screenshots/08-readonly-viewer.png) | ![Login screen in light and dark mode](screenshots/screenshots/01-login-light.png) |
 
 *(All screenshots use fictitious sample data — no real business inventory is shown.)*
 
