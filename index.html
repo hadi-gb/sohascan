@@ -159,8 +159,12 @@
 
   .theme-toggle {
     position: fixed;
-    top: 14px;
-    right: 14px;
+    /* iOS reserves the top strip for the status bar / Dynamic Island, and that area
+       isn't tappable by page content even though it isn't visually blocked — offset
+       by the safe-area inset (0 on devices without one, e.g. desktop/Android) so the
+       button always lands just below it instead of underneath it. */
+    top: calc(14px + env(safe-area-inset-top, 0px));
+    right: calc(14px + env(safe-area-inset-right, 0px));
     z-index: 10000;
     background: var(--surface-2);
     border: 1px solid var(--border);
@@ -536,6 +540,11 @@
     font-size: 0.72rem;
     color: var(--text-muted);
     font-weight: 500;
+  }
+  .result-cat-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     margin-top: 2px;
   }
   .result-code {
@@ -1454,10 +1463,10 @@
     var qtyClass = qs.tone;
     var exClass = ex.tone;
 
-    // Editing an existing batch and adding a brand-new expiry are kept as separate,
-    // mutually exclusive actions — the Edit link only appears when neither the
-    // "add a new expiry" form nor the (legacy) conflict box is already open.
-    var editingAllowed = canWrite() && s && !s.actionOpen;
+    // Editing a batch, adding a brand-new expiry, and renaming the product are kept
+    // as separate, mutually exclusive actions — the Edit link only appears when none
+    // of the other panels is already open.
+    var editingAllowed = canWrite() && s && !s.actionOpen && !s.editingName;
     var isEditing = editingAllowed && s.editBatch && s.editBatch.id === batch.id;
     var headHtml = "";
     if (batch.notes || editingAllowed) {
@@ -1504,16 +1513,16 @@
   // module above), each existing batch can be edited directly (qty + notes) via
   // its own Edit link, and adding a genuinely new expiry is a separate action —
   // no re-scanning needed to reach either.
-  var viewState = null; // { barcode, existing, loading, actionOpen, editBatch }
+  var viewState = null; // { barcode, existing, loading, actionOpen, editBatch, editingName }
 
   function showResult(code) {
     if (usingImported) {
-      viewState = { barcode: code, existing: sortBatches(batchesForBarcode(code)), loading: false, actionOpen: false, editBatch: null };
+      viewState = { barcode: code, existing: sortBatches(batchesForBarcode(code)), loading: false, actionOpen: false, editBatch: null, editingName: false };
       logRecentIfFound();
       renderResult();
       return;
     }
-    viewState = { barcode: code, existing: [], loading: true, actionOpen: false, editBatch: null };
+    viewState = { barcode: code, existing: [], loading: true, actionOpen: false, editBatch: null, editingName: false };
     renderResult();
     apiLookup(code).then(function (matches) {
       if (!viewState || viewState.barcode !== code) return; // superseded by a newer scan
@@ -1525,6 +1534,16 @@
       els.resultBody.innerHTML = '<div class="not-found">Couldn&rsquo;t reach your sheet: ' + escapeHtml(err.message) + '. Check your connection and try again.</div>';
       viewState = null;
     });
+  }
+
+  // Products with no real barcode are identified only by their sheet row — several
+  // rows can share the same blank/placeholder barcode text — so opening one from the
+  // Inventory list uses the batch object already in hand rather than a barcode-text
+  // lookup that could resolve to the wrong row. Not logged to "recent scans": this
+  // isn't a scan, and recents are looked back up by barcode text too.
+  function showResultForBatch(batch) {
+    viewState = { barcode: batch.barcode, existing: [batch], loading: false, actionOpen: false, editBatch: null, editingName: false };
+    renderResult();
   }
 
   // Logs this lookup to "recent scans" once, right when fresh results come back —
@@ -1603,11 +1622,22 @@
 
   function renderFoundDetails(s) {
     var first = s.existing[0];
+    // Renaming is its own mutually-exclusive action, same idea as per-batch editing
+    // and adding a new expiry — only one panel is ever open at a time.
+    var nameEditAllowed = canWrite() && !s.actionOpen && !s.editBatch;
+    var nameEditLinkHtml = nameEditAllowed
+      ? '<button type="button" class="edit-link' + (s.editingName ? " active" : "") + '" id="editNameBtn">' + (s.editingName ? "Editing&hellip;" : "Edit") + '</button>'
+      : "";
     var html = '<div class="result-head">' +
       '<div><h3>' + escapeHtml(first.name) + '</h3>' +
-      '<div class="result-cat">' + s.existing.length + ' batch' + (s.existing.length === 1 ? "" : "es") + ' on file' + '</div></div>' +
+      '<div class="result-cat-row"><span class="result-cat">' + s.existing.length + ' batch' + (s.existing.length === 1 ? "" : "es") + ' on file' + '</span>' + nameEditLinkHtml + '</div></div>' +
       '<div class="result-code">' + escapeHtml(first.hasBarcode ? s.barcode : "no barcode") + '</div>' +
     '</div>';
+
+    if (s.editingName) {
+      html += renderNameEditPanelHtml(first);
+    }
+
     html += '<div class="price-row"><span class="plabel">Price</span><span class="pvalue">N/A &middot; Shopify not connected</span></div>';
     html += '<div class="batch-list">' + s.existing.map(function (b) { return renderBatchRow(b, s); }).join("") + '</div>';
 
@@ -1635,19 +1665,23 @@
       return;
     }
 
-    var addBtnDisabled = !!s.editBatch;
+    var addBtnDisabled = !!s.editBatch || !!s.editingName;
     html += '<div class="action-zone"><button class="btn-primary" id="openActionBtn" type="button"' + (addBtnDisabled ? " disabled" : "") + '>+ Add a new expiry</button></div>';
     els.resultBody.innerHTML = html;
     if (!addBtnDisabled) {
-      document.getElementById("openActionBtn").addEventListener("click", function () { s.actionOpen = true; renderResult(); });
+      document.getElementById("openActionBtn").addEventListener("click", function () { s.actionOpen = true; s.editingName = false; renderResult(); });
     }
     wireBatchEditLinks(s);
     if (s.editBatch) wireEditPanel(s);
+    wireNameEditLink(s);
+    if (s.editingName) wireNameEditPanel(s);
   }
 
   // Clicking a batch row's Edit link opens (or switches to) that row's inline panel.
+  // Scoped to links inside batch rows only — the header's rename link reuses the same
+  // .edit-link class but has no data-edit-id, so it must never be picked up here.
   function wireBatchEditLinks(s) {
-    var links = els.resultBody.querySelectorAll(".edit-link");
+    var links = els.resultBody.querySelectorAll(".batch-row .edit-link");
     for (var i = 0; i < links.length; i++) {
       (function (btn) {
         btn.addEventListener("click", function () {
@@ -1655,10 +1689,46 @@
           var match = s.existing.find(function (b) { return String(b.id) === id; });
           if (!match) return;
           s.editBatch = match;
+          s.editingName = false;
           renderResult();
         });
       })(links[i]);
     }
+  }
+
+  // Renaming updates the Brand/Product columns for every batch sharing this barcode
+  // (they're the same product) — or, for a no-barcode row, just that one row, since
+  // several unrelated rows can share the same blank/placeholder barcode text.
+  function renderNameEditPanelHtml(first) {
+    return '<div class="add-card" style="margin-bottom:14px;">' +
+      '<h4>Rename this product</h4>' +
+      '<p class="add-sub">' + (first.hasBarcode ? "Updates every batch on file sharing this barcode." : "Updates this row.") + '</p>' +
+      '<div class="field"><label for="editBrand">Brand</label><input id="editBrand" type="text" value="' + escapeHtml(first.brand || "") + '" placeholder="e.g. EUCERIN"></div>' +
+      '<div class="field"><label for="editProduct">Product name</label><input id="editProduct" type="text" value="' + escapeHtml(first.productOnly || "") + '" placeholder="e.g. eye contour serum 15ML"></div>' +
+      '<div class="form-actions">' +
+        '<button class="btn-ghost btn-small" id="cancelNameEditBtn" type="button">Cancel</button>' +
+        '<button class="btn-primary btn-small" id="saveNameEditBtn" type="button">Save</button>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function wireNameEditLink(s) {
+    var btn = document.getElementById("editNameBtn");
+    if (!btn) return;
+    btn.addEventListener("click", function () {
+      s.editingName = true;
+      s.actionOpen = false;
+      s.editBatch = null;
+      renderResult();
+    });
+  }
+
+  function wireNameEditPanel(s) {
+    document.getElementById("cancelNameEditBtn").addEventListener("click", function () {
+      s.editingName = false;
+      renderResult();
+    });
+    document.getElementById("saveNameEditBtn").addEventListener("click", saveNameEdit);
   }
 
   // Wires the stepper + Cancel/Save controls inside the one open edit panel.
@@ -1760,6 +1830,51 @@
     }).catch(function (err) {
       alert("Couldn’t save to the sheet: " + err.message);
       if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = "Save to inventory"; }
+    });
+  }
+
+  // Saves a product rename. A real barcode renames every row sharing it (the backend
+  // matches by barcode text); a no-barcode row is renamed by its exact row number
+  // instead, since barcode text alone can't tell those rows apart.
+  function saveNameEdit() {
+    var s = viewState;
+    var first = s.existing[0];
+    var brandVal = document.getElementById("editBrand").value.trim();
+    var productVal = document.getElementById("editProduct").value.trim();
+    if (!productVal) { alert("Please enter a product name."); return; }
+    var newName = brandVal ? (brandVal + " — " + productVal) : productVal;
+
+    function applyLocally() {
+      s.existing.forEach(function (b) { b.brand = brandVal; b.productOnly = productVal; b.name = newName; });
+    }
+
+    if (usingImported) {
+      applyLocally();
+      els.resultBody.innerHTML = '<div class="add-card"><h4>Renamed</h4><p class="add-sub">' + escapeHtml(newName) + '</p><p class="add-sub">Test file only — not written to your real sheet.</p></div>';
+      viewState = null;
+      renderCatalog();
+      return;
+    }
+
+    var saveBtn = document.getElementById("saveNameEditBtn");
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Saving…"; }
+
+    var payload = { op: "rename", brand: brandVal, product: productVal };
+    if (first.hasBarcode) {
+      payload.barcode = s.barcode;
+    } else {
+      payload.row = first.row;
+    }
+
+    apiPost(payload).then(function (res) {
+      if (!res.ok) throw new Error(res.error || "Could not rename.");
+      applyLocally();
+      els.resultBody.innerHTML = '<div class="add-card"><h4>Renamed</h4><p class="add-sub">' + escapeHtml(newName) + '</p><p class="add-sub">Saved to your MASTER INVENTORY sheet.</p></div>';
+      viewState = null;
+      refreshCatalog();
+    }).catch(function (err) {
+      alert("Couldn’t save to the sheet: " + err.message);
+      if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = "Save"; }
     });
   }
 
@@ -1968,7 +2083,11 @@
     shown.forEach(function (p) {
       var card = document.createElement("div");
       var single = p.batches.length === 1 ? p.batches[0] : null;
-      card.className = "inv-card" + (single ? "" : " clickable");
+      // Every card opens the full details/edit screen on click now — single-batch
+      // products keep their inline quick-adjust stepper too (for the common case of
+      // just bumping a count), with its own clicks kept from also triggering the
+      // card-level navigation via stopPropagation below.
+      card.className = "inv-card clickable";
       var badges = single
         ? inventoryExpiryBadge(single) + inventoryQtyBadge(single)
         : '<span class="inv-badge warn">' + p.batches.length + ' batches</span><span class="inv-badge info">nearest: ' + escapeHtml(p.nearest.expiry ? p.nearest.expiryRaw : "no expiry on file") + '</span>';
@@ -1978,15 +2097,20 @@
         '<div class="inv-badges">' + badges + '</div>' +
         '</div>' +
         (single ? (canWrite() ? inventoryStepperHtml(single) : "") : '<span class="inv-chev">›</span>');
+      card.addEventListener("click", function () {
+        setTab("scan");
+        if (single && !single.hasBarcode) {
+          showResultForBatch(single);
+        } else {
+          handleCode(p.barcode);
+        }
+      });
       if (single && canWrite()) {
+        var stepperEl = card.querySelector(".inv-stepper");
+        if (stepperEl) stepperEl.addEventListener("click", function (e) { e.stopPropagation(); });
         var deltaInputEl = card.querySelector(".inv-delta");
         card.querySelector(".inv-dec").addEventListener("click", function () { inventoryAdjust(single, -1, deltaInputEl); });
         card.querySelector(".inv-inc").addEventListener("click", function () { inventoryAdjust(single, 1, deltaInputEl); });
-      } else if (!single) {
-        card.addEventListener("click", function () {
-          setTab("scan");
-          handleCode(p.barcode);
-        });
       }
       els.catalog.appendChild(card);
     });
